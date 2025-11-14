@@ -1,0 +1,6 @@
+build/**
+.venv
+compile_commands.json
+*.egg-info
+.cache
+
