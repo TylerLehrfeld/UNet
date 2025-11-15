@@ -1,5 +1,4 @@
 #include "cuda_lib.h"
-#include <__clang_cuda_builtin_vars.h>
 #include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
@@ -15,8 +14,8 @@ __global__ void XAVIER_or_HE_initialize(float *weights, int sqrt_N,
   weights[idx] = curand_normal(&state) * 1.41421356237 / sqrt_N;
 }
 
-float *getCudaPointer(int num_floats, Initiation_type i_type, int N,
-                      int num_weights) {
+__host__ float *getCudaPointer(int num_floats, Initiation_type i_type, int N,
+                               int num_weights) {
   float *dPointer;
   cudaMalloc(&dPointer, num_floats * sizeof(float));
   cudaMemset(dPointer, 0, num_floats * sizeof(float));
@@ -99,7 +98,7 @@ __global__ void convolution(const float *weights, const float *inputs,
                  out_channel];
   // we index outpus like inputs: activations[batch][channel][i][j]
   activations[flattened_index(batch_num, out_channel, channels_out, h_out,
-                              H_out, w_out, W_out)] = sum;
+                              H_out, w_out, W_out)] = sum > 0 ? sum : 0;
 }
 
 void convolve(const float *weights, const float *inputs, float *activations,

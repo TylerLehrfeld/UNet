@@ -17,6 +17,8 @@ PYBIND11_MODULE(neural_net, m) {
       .value("CONV_LAYER", Layer_type::CONV_LAYER)
       .value("ATTENTION_LAYER", Layer_type::ATTENTION_LAYER)
       .value("BN_LAYER", Layer_type::BN_LAYER)
+      .value("UPSAMPLING_LAYER", Layer_type::UPSAMPLING_LAYER)
+      .value("CONCAT_LAYER", Layer_type::CONCAT_LAYER)
       .export_values();
 
   py::class_<LayerDesc>(m, "LayerDesc")

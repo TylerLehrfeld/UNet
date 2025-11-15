@@ -6,22 +6,18 @@ set(CMAKE_CUDA_ARCHITECTURES 89)
 project(neural_net LANGUAGES C CXX CUDA)
 find_package(CUDAToolkit REQUIRED)
 add_subdirectory(extern/pybind11)
-#include directories 
 add_subdirectory(src/cuda_library)
 add_subdirectory(src/neural_net_implementation)
 include_directories(
     ${CMAKE_SOURCE_DIR}/src/neural_net_implementation
     ${CMAKE_SOURCE_DIR}/src/cuda_library
 )
-# define example bindings. Will eventually delete
-#pybind11_add_module(cmake_example src/bindings/main.cpp)
-#target_link_libraries(cmake_example PRIVATE cuda_lib)
-#target_compile_definitions(cmake_example
-#                           PRIVATE VERSION_INFO=${EXAMPLE_VERSION_INFO})
 
 # define NN implementation module
 pybind11_add_module(neural_net src/bindings/net.cpp)
-target_link_libraries(neural_net PRIVATE cuda_lib)
+target_link_libraries(neural_net PRIVATE 
+  cuda_lib
+)
 target_compile_definitions(neural_net
                            PRIVATE VERSION_INFO=${EXAMPLE_VERSION_INFO})
 

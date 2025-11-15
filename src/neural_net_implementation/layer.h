@@ -3,6 +3,7 @@
 #define UNET_LAYER
 
 #include "cuda_lib.h"
+#include <iostream>
 #include <string>
 #include <vector>
 enum Layer_type {
@@ -10,7 +11,9 @@ enum Layer_type {
   BN_LAYER,
   MAX_POOL_LAYER,
   ATTENTION_LAYER,
-  FC_LAYER
+  FC_LAYER,
+  CONCAT_LAYER,
+  UPSAMPLING_LAYER,
 };
 struct LayerDesc {
   Layer_type type;
@@ -34,6 +37,7 @@ public:
       int i = 0;
       in_height = shape_description[i++];
       in_width = shape_description[i++];
+      in_depth = shape_description[i++];
       in_channels = shape_description[i++];
       out_channels = shape_description[i++];
       kernel_size = shape_description[i++];
@@ -58,7 +62,7 @@ public:
   float *parameters;
   void forward(float *input, int batch_size) {
     if (layer_type == CONV_LAYER) {
-      forward_convolution(input, batch_size);
+      forward_convolution(input, batch_size, true);
     }
   }
   void backward();
@@ -71,6 +75,7 @@ private:
   // layer_type
   int in_height;
   int in_width;
+  int in_depth;
   int in_channels;
   int out_channels;
   int kernel_size;
@@ -78,7 +83,7 @@ private:
   int stride;
   int out_height;
   int out_width;
-  void forward_convolution(float *input, int batch_size);
+  void forward_convolution(float *input, int batch_size, bool use_relu_activation);
 };
 
 #endif // !UNET_LAYER

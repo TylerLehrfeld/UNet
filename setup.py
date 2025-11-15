@@ -171,7 +171,7 @@ setup(
     name="neural_net",
     version="0.0.1",
     author="Tyler Lehrfeld",
-    author_email="tlehrfe2@jhu.edu"
+    author_email="tlehrfe2@jhu.edu",
     description="A UNet implementation using CUDA and pybind11",
     long_description="",
     ext_modules=[CMakeExtension("neural_net")], 
