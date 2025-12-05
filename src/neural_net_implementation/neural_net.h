@@ -6,6 +6,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace py = pybind11;
@@ -15,39 +16,47 @@ class NN {
 public:
   void infer() {};
   void create(const vector<LayerDesc> &desc) {
-    for (LayerDesc d : desc) {
-      layers.push_back(Layer(d));
-    }
-    for (int i = 0; i < layers.size(); i++) {
-      for (int j = 0; j < desc[i].parents.size(); j++) {
-        if (desc[i].parents[j] < 0 || desc[i].parents[j] >= desc.size())
-          throw std::runtime_error("invalid parent index");
-        layers[i].parents.push_back(&layers[desc[i].parents[j]]);
+    int i = 0;
+    for(LayerDesc d : desc) {
+      for(int j = 0; j < desc[i].parents.size(); j++) {
+        if(desc[i].parents[j] < 0 || desc[i].parents[j] >= i) {
+          std::stringstream ss;
+          ss << "invalid parent index: " << desc[i].parents[j]
+             << " is less than 0 or greater than current index " << i;
+          throw std::runtime_error(ss.str());
+        }
       }
+      // pass description and previous layers to constructor so that each layer
+      // has access to its parents
+      layers.push_back(Layer(d, layers));
+      i++;
     }
     // find output layer:
     std::set<int> is_parent;
-    for (LayerDesc d : desc) {
-      for (int parent : d.parents) {
+    for(LayerDesc d : desc) {
+      for(int parent : d.parents) {
         is_parent.insert(parent);
       }
     }
-    if (is_parent.size() != desc.size() - 1) {
+    if(is_parent.size() != desc.size() - 1) {
       throw std::runtime_error(
           "your network does not have a single output node");
     }
     int xorAll = 0;
     int xorSet = 0;
 
-    for (int i = 0; i < desc.size(); ++i)
+    for(int i = 0; i < desc.size(); ++i)
       xorAll ^= i;
 
-    for (int x : is_parent)
+    for(int x : is_parent)
       xorSet ^= x;
     final_layer = xorAll ^ xorSet;
   };
-  void train(py::array_t<float> images, vector<float> shape,
-             py::array_t<uint8_t> masks, float learning_rate, int epochs,
+  void train(py::array_t<float> images,
+             vector<float> shape,
+             py::array_t<uint8_t> masks,
+             float learning_rate,
+             int epochs,
              int batch_size) {
     py::buffer_info img_info = images.request();
     py::buffer_info msk_info = masks.request();
@@ -58,8 +67,8 @@ public:
     int C = img_info.shape[1];
     int H = img_info.shape[2];
     int W = img_info.shape[3];
-    if ((N != msk_info.shape[0]) || (H != msk_info.shape[1]) ||
-        (W != msk_info.shape[2])) {
+    if((N != msk_info.shape[0]) || (H != msk_info.shape[1]) ||
+       (W != msk_info.shape[2])) {
       throw std::runtime_error("Mask dimensions do not equal image dimensions");
     }
     // std::cout << "recieved images" << std::endl;
@@ -68,23 +77,26 @@ public:
     // int h = 40;
     // int w = 30;
     // std::cout << img_ptr[n * C * H * W + c * H * W + h * W + w] << std::endl;
-    for (int epoch = 0; epoch < epochs; epoch++) {
+    for(int epoch = 0; epoch < epochs; epoch++) {
       std::cout << "beggining epoch " << epoch << "/" << epochs << std::endl;
       float total_loss = 0;
       float total_dice_score = 0;
-      for (int batch_start_ind = 0; batch_start_ind < N;
-           batch_start_ind += batch_size) {
+      for(int batch_start_ind = 0; batch_start_ind < N;
+          batch_start_ind += batch_size) {
         std::cout << "batch: " << batch_start_ind / batch_size << std::endl;
         int cur_batch_size = batch_size;
-        if (batch_start_ind + batch_size > N) {
+        if(batch_start_ind + batch_size > N) {
           cur_batch_size = N - batch_start_ind;
         }
-        layers[final_layer].forward(img_ptr + batch_start_ind * C * H * W,
-                                    batch_size);
-        float *output_map = layers[final_layer].activations;
+        float *output_map =
+            forward(img_ptr + batch_start_ind * C * H * W, batch_size, false);
         float dice_score;
-        float loss_val = loss(output_map, msk_ptr + batch_start_ind * H * W, H,
-                              W, dice_score);
+        float loss_val = loss(output_map,
+                              msk_ptr + batch_start_ind * H * W,
+                              batch_size,
+                              H,
+                              W,
+                              dice_score);
         total_dice_score += dice_score;
         total_loss += loss_val;
         backward(loss_val);
@@ -97,12 +109,23 @@ public:
 
 private:
   vector<Layer> layers;
-  void forward(float *input, int batch_size) {
-    layers[final_layer].forward(input, batch_size);
-    layers[final_layer].activations;
+  float *forward(float *input, int batch_size, bool inference) {
+    if(batch_size < 1) {
+      throw std::runtime_error("Batch size must be greater than 0");
+    }
+    for(Layer l : layers) {
+      l.done = false;
+    }
+    layers[final_layer].forward(input, batch_size, inference);
+    return layers[final_layer].activations;
   }
   void backward(float loss_val) {}
-  float loss(float *final_map, float *y, int H, int W, float &dice_score) {
+  float loss(float *final_map,
+             float *y,
+             int batch_size,
+             int H,
+             int W,
+             float &dice_score) {
     return 0;
   }
   int final_layer;

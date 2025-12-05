@@ -1,0 +1,3 @@
+SpaceBeforeParens: Never
+BinPackParameters: false
+BinPackArguments: false

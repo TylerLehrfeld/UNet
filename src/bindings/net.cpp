@@ -1,5 +1,6 @@
 #include "layer.h"
 #include "neural_net.h"
+#include "convolution_layer_functions.h"
 #include <pybind11/detail/common.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -21,11 +22,21 @@ PYBIND11_MODULE(neural_net, m) {
       .value("CONCAT_LAYER", Layer_type::CONCAT_LAYER)
       .export_values();
 
+  py::enum_<Activation_type>(m, "ActivationType")
+      .value("ReLU", Activation_type::ReLU) 
+      .value("SOFTMAX", Activation_type::SOFTMAX)
+      .value("NONE", Activation_type::NONE)
+      .value("TANH", Activation_type::TANH)
+      .value("SIGMOID", Activation_type::SIGMOID)
+      .value("LEAKY_ReLU", Activation_type::LEAKY_ReLU);
+
   py::class_<LayerDesc>(m, "LayerDesc")
       .def(py::init<const Layer_type &, const std::vector<int> &,
                     const std::vector<int> &>(),
            py::arg("type"), py::arg("shape"), py::arg("parents"))
       .def_readwrite("type", &LayerDesc::type)
-      .def_readwrite("shape", &LayerDesc::shape_descriptor)
-      .def_readwrite("parents", &LayerDesc::parents);
+      .def_readwrite("shape", &LayerDesc::descriptor)
+      .def_readwrite("parents", &LayerDesc::parents)
+      .def_readwrite("activation", &LayerDesc::activation)
+      .def_readwrite("leaky_const", &LayerDesc::leaky_const);
 }
