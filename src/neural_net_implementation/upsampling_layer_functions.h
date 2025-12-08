@@ -1,7 +1,9 @@
-#include "cuda_lib.h"
-#include "layer.h"
 #include "BN_functions.h"
 #include "activation_functions.h"
+#include "cuda_lib.h"
+#include "layer.h"
+
+
 inline void Layer::forward_upsample(float *input,
                                     int batch_size,
                                     bool use_relu_activation,
@@ -21,8 +23,17 @@ inline void Layer::forward_upsample(float *input,
                 batch_size);
 
   if(inference) {
-
+    forward_batch_norm_inference(
+        activations, parameters, BN_stats, out_channels, out_height, out_width);
   } else {
+    forward_batch_norm_training(activations,
+                                parameters,
+                                BN_stats,
+                                BN_batch_stats,
+                                out_channels,
+                                out_height,
+                                out_width,
+                                batch_size);
   }
   forward_relu(activations, num_activations);
 }

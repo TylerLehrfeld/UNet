@@ -1,5 +1,6 @@
 #ifndef UNET_NN_IMPL
 #define UNET_NN_IMPL
+#include "cuda_lib.h"
 #include "layer.h"
 #include <cassert>
 #include <cstdint>
@@ -51,6 +52,8 @@ public:
     for(int x : is_parent)
       xorSet ^= x;
     final_layer = xorAll ^ xorSet;
+    //TODO double check this
+    layers[final_layer].activation_type = SIGMOID;
   };
   void train(py::array_t<float> images,
              vector<float> shape,
@@ -91,15 +94,15 @@ public:
         float *output_map =
             forward(img_ptr + batch_start_ind * C * H * W, batch_size, false);
         float dice_score;
-        float loss_val = loss(output_map,
-                              msk_ptr + batch_start_ind * H * W,
-                              batch_size,
-                              H,
-                              W,
-                              dice_score);
+        loss(output_map,
+             msk_ptr + batch_start_ind * H * W,
+             batch_size,
+             H,
+             W,
+             dice_score);
         total_dice_score += dice_score;
-        total_loss += loss_val;
-        backward(loss_val);
+        total_loss += *loss_val;
+        backward();
       }
       std::cout << "ephoch " << epoch << " done." << std::endl;
       std::cout << "average loss: " << total_loss / N << std::endl;
@@ -108,6 +111,7 @@ public:
   };
 
 private:
+  float *loss_val;
   vector<Layer> layers;
   float *forward(float *input, int batch_size, bool inference) {
     if(batch_size < 1) {
@@ -119,14 +123,14 @@ private:
     layers[final_layer].forward(input, batch_size, inference);
     return layers[final_layer].activations;
   }
-  void backward(float loss_val) {}
+  void backward() {}
   float loss(float *final_map,
              float *y,
              int batch_size,
              int H,
              int W,
              float &dice_score) {
-    return 0;
+    return cuda_dice_loss();
   }
   int final_layer;
 };

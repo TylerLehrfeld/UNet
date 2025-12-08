@@ -49,7 +49,7 @@ public:
     } else if(layer_type == CONCAT_LAYER) {
       init_concat_layer(desc);
     } else if(layer_type == UPSAMPLING_LAYER) {
-      // TODO
+      init_upsampling_layer(desc);
     }
   }
   std::vector<int> description;
@@ -92,8 +92,10 @@ public:
         forward_upsample(input, batch_size, true, true, inference);
       } else {
         float *prev_activations = parents[0]->activations;
-        forward_upsample(input, batch_size, true, true, inference);
+        forward_upsample(prev_activations, batch_size, true, true, inference);
       }
+    } else if(layer_type == ATTENTION_LAYER) {
+      // TODO
     }
 
     done = true;
@@ -102,7 +104,8 @@ public:
   float *activations;
   std::vector<Layer *> parents;
   Layer_type layer_type;
-
+  Activation_type activation_type;
+  
   bool done;
 
 private:
@@ -120,6 +123,10 @@ private:
   bool batch_norm;
   Activation_type activation_type;
   float *BN_parameters;
+  float *BN_stats;
+  float *BN_batch_stats;
+  float *activations_int_1;
+  float *activations_int_2;
   void forward_convolution(float *input,
                            int batch_size,
                            bool use_relu_activation,
@@ -130,7 +137,7 @@ private:
                         bool use_relu_activation,
                         bool use_batch_norm,
                         bool inference);
-
+  void forward_attention(float *input_x, float *input_g, int batch_size);
   void forward_max_pool(float *input, int batch_size);
 
   void
@@ -169,6 +176,8 @@ private:
     parameters =
         getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
     BN_parameters = getCudaPointer(out_channels * 2, BN);
+    BN_stats = getCudaPointer(out_channels * 2, BN);
+    BN_batch_stats = getCudaPointer(out_channels * 2);
   }
 
   void init_max_pool(const LayerDesc &desc) {
@@ -241,15 +250,44 @@ private:
          << " parents givent";
       throw std::runtime_error(ss.str());
     }
-    int g_in_channels = parents[0]->out_channels;
-    int x_in_channels = parents[1]->out_channels;
+    int g_in_channels = parents[1]->out_channels;
+    int x_in_channels = parents[0]->out_channels;
     int intermediate_channels = x_in_channels / 2;
+    int g_H = parents[1]->out_height;
+    int g_W = parents[1]->out_width;
+    int x_H = parents[0]->out_height;
+    int x_W = parents[0]->out_width;
+    if(g_H != x_H / 2 || g_W != x_W / 2) {
+      std::stringstream ss;
+      ss << "attention not implemented for g that is not half the size of x. g "
+            "dimensions: "
+         << g_H << ", " << g_W << std::endl
+         << "x dimensions: " << x_H << ", " << x_W;
+      throw std::runtime_error(ss.str());
+    }
+    out_height = x_H;
+    in_height = x_H;
+    out_width = x_W;
+    in_width = x_W;
+    in_channels = parents[0]->output_shape[0];
+    out_channels = in_channels;
+    output_shape = parents[0]->output_shape;
+    input_shape = {parents[0]->input_shape[0],
+                   parents[0]->input_shape[1],
+                   parents[0]->input_shape[2],
+                   parents[1]->input_shape[0],
+                   parents[1]->input_shape[1],
+                   parents[1]->input_shape[2]};
+
+    // organized like so parameters[in_channel][out_channel]
+    // in channel is organized x, then g.
+    // after this, we have the psi weights. Then the intermediate, and psi
+    // biases.
     int num_weights = g_in_channels * intermediate_channels +
-                      x_in_channels * intermediate_channels;
+                      x_in_channels * intermediate_channels +
+                      intermediate_channels;
     int num_biases = intermediate_channels + 1;
     int num_weights_and_biases = num_biases + num_weights;
-    input_shape = parents[0]->output_shape;
-    output_shape = input_shape;
     // TODO determine if this is a good enough initialization
     parameters =
         getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
@@ -269,7 +307,9 @@ private:
     kernel_size = description[4];
     input_shape = {in_channels, in_height, in_width};
     int scale = kernel_size;
-    output_shape = {out_channels, in_height * scale, out_height * scale};
+    out_height = scale * in_height;
+    out_width = scale * in_width;
+    output_shape = {out_channels, out_height, out_width};
     if(input_shape != parents[0]->output_shape) {
       std::stringstream ss;
       ss << "input shape to upsampling layer does not equal output shape of "
@@ -289,6 +329,9 @@ private:
     int num_biases = out_channels;
     parameters =
         getCudaPointer(num_biases + num_weights, HE, num_weights, num_weights);
+    BN_parameters = getCudaPointer(out_channels * 2, BN);
+    BN_stats = getCudaPointer(out_channels * 2, BN);
+    BN_batch_stats = getCudaPointer(out_channels * 2);
   }
 };
 

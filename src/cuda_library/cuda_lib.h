@@ -55,4 +55,34 @@ void cuda_upsample(const float *inputs,
                    int W_in,
                    int batch_size);
 
+void cuda_relu(float *activations, int num_activations);
+
+void cuda_BN_train(float *activations,
+                   float *weights,
+                   float *BN_batch_stats,
+                   float *BN_stats,
+                   int num_channels,
+                   int H,
+                   int W,
+                   int batch_size);
+
+void cuda_BN_inference(float *activations,
+                       float *weights,
+                       float *BN_stats,
+                       int H,
+                       int W,
+                       int num_channels);
+void cuda_attention(float *activations_int_1,
+                    float *activations_int_2,
+                    float *activations,
+                    float *weights,
+                    float *input_x,
+                    float *input_g,
+                    int batch_size,
+                    int H_x,
+                    int W_x,
+                    int channels_in_x,
+                    int channels_in_g,
+                    int int_channels);
+
 #endif
