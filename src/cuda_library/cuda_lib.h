@@ -156,4 +156,47 @@ void cuda_max_pool_backward(const float *grad_activations,
                             int in_height,
                             int in_width);
 
+void cuda_upsample_backward(const float *grad_activations,
+                            const float *inputs,
+                            const float *weights,
+                            float *grad_inputs,
+                            float *grad_weights,
+                            int scale,
+                            int channels_in,
+                            int channels_out,
+                            int H_in,
+                            int W_in,
+                            int batch_size);
+
+void cuda_attention_backward(float *grad_activations,
+                             float *activations_int_1,
+                             float *activations_int_2,
+                             float *input_x,
+                             float *input_g,
+                             float *weights,
+                             float *grad_activations_int_1,
+                             float *grad_activations_int_2,
+                             float *grad_input_x,
+                             float *grad_input_g,
+                             float *grad_weights,
+                             int batch_size,
+                             int H_x,
+                             int W_x,
+                             int channels_in_x,
+                             int channels_in_g,
+                             int int_channels);
+void cuda_update_weights(float *weights,
+                         float *dLdW,
+                         float *adam_parameters,
+                         float learning_rate,
+                         int num_weights,
+                         int t);
+
+void cudaLibFree(float *dPointer);
+void cuda_threshold(float *x, float threshold, int num_floats);
+float *cudaToCPU(float *dPointer, int num_floats);
+void cuda_gpu_reset();
+void cuda_check_err();
+
+float cudaValToCPU(float *dPointer, int ind);
 #endif

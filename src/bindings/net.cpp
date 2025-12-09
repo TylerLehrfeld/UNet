@@ -1,6 +1,10 @@
-#include "layer.h"
-#include "neural_net.h"
+#include "attention_layer_functions.h"
+#include "concat_layer_functions.h"
 #include "convolution_layer_functions.h"
+#include "layer.h"
+#include "max_pool_functions.h"
+#include "neural_net.h"
+#include "upsampling_layer_functions.h"
 #include <pybind11/detail/common.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -11,7 +15,8 @@ PYBIND11_MODULE(neural_net, m) {
       .def(py::init<>())
       .def("create", &NN::create)
       .def("train", &NN::train)
-      .def("infer", &NN::infer);
+      .def("infer", &NN::infer)
+      .def("test", &NN::test);
   py::enum_<Layer_type>(m, "LayerType")
       .value("MAX_POOL_LAYER", Layer_type::MAX_POOL_LAYER)
       .value("FC_LAYER", Layer_type::FC_LAYER)
@@ -23,7 +28,7 @@ PYBIND11_MODULE(neural_net, m) {
       .export_values();
 
   py::enum_<Activation_type>(m, "ActivationType")
-      .value("ReLU", Activation_type::ReLU) 
+      .value("ReLU", Activation_type::ReLU)
       .value("SOFTMAX", Activation_type::SOFTMAX)
       .value("NONE", Activation_type::NONE)
       .value("TANH", Activation_type::TANH)
@@ -31,9 +36,16 @@ PYBIND11_MODULE(neural_net, m) {
       .value("LEAKY_ReLU", Activation_type::LEAKY_ReLU);
 
   py::class_<LayerDesc>(m, "LayerDesc")
-      .def(py::init<const Layer_type &, const std::vector<int> &,
-                    const std::vector<int> &>(),
-           py::arg("type"), py::arg("shape"), py::arg("parents"))
+      .def(py::init<const Layer_type &,
+                    const std::vector<int> &,
+                    const std::vector<int> &,
+                    const Activation_type &,
+                    double>(),
+           py::arg("type"),
+           py::arg("shape"),
+           py::arg("parents"),
+           py::arg("activation") = NONE,
+           py::arg("leaky_const") = 0.01)
       .def_readwrite("type", &LayerDesc::type)
       .def_readwrite("shape", &LayerDesc::descriptor)
       .def_readwrite("parents", &LayerDesc::parents)
