@@ -1,6 +1,4 @@
 #include "cuda_lib.h"
-#include <__clang_cuda_builtin_vars.h>
-#include <__clang_cuda_runtime_wrapper.h>
 #include <climits>
 #include <cmath>
 #include <cuda_runtime.h>
@@ -10,6 +8,8 @@
 
 const float MOMENTUM = 0.9f;
 const float INV_MOMENTUM = 1 - MOMENTUM;
+
+__device__ inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
 
 __global__ void
 XAVIER_or_HE_initialize(float *weights, int sqrt_N, int num_weights) {
@@ -67,9 +67,7 @@ __global__ void convolution(const float *weights,
                             int padding,
                             int stride) {
   int kern_squared = kernel_size * kernel_size;
-  int idx = threadIdx.x + blockIdx.x * blockDim.x +
-            (threadIdx.y + blockIdx.y * blockDim.y) * (gridDim.x * blockDim.x);
-
+  
   // int batch_num = idx / W_out / H_out / channels_out;
   // int out_channel = ((idx / W_out / H_out) % channels_out);
   // int h_out = (idx / W_out) % H_out;
@@ -186,6 +184,207 @@ void convolve(const float *weights,
       padding,
       stride);
 }
+
+__global__ void convolution_backward_input(float *grad_activations,
+                                           float *weights,
+                                           float *grad_inputs,
+                                           int batch_size,
+                                           int kernel_size,
+                                           int channels_in,
+                                           int channels_out,
+                                           int H_out,
+                                           int W_out,
+                                           int H_in,
+                                           int W_in,
+                                           int padding,
+                                           int stride) {
+  int spatial_idx = threadIdx.x + blockIdx.y * blockDim.x;
+  int batch_num = blockIdx.z;
+  int in_channel = blockIdx.x;
+  int h_in = spatial_idx / W_in;
+  int w_in = spatial_idx % W_in;
+
+  if(spatial_idx >= H_in * W_in)
+    return;
+
+  float grad_sum = 0.0f;
+
+  for(int out_channel = 0; out_channel < channels_out; out_channel++) {
+    for(int kh = 0; kh < kernel_size; kh++) {
+      for(int kw = 0; kw < kernel_size; kw++) {
+        int h_out = h_in + padding - kh + kernel_size / 2;
+        int w_out = w_in + padding - kw + kernel_size / 2;
+
+        if(h_out >= 0 && h_out < H_out && w_out >= 0 && w_out < W_out) {
+          float weight = weights[flattened_index(in_channel,
+                                                 out_channel,
+                                                 channels_out,
+                                                 kh,
+                                                 kernel_size,
+                                                 kw,
+                                                 kernel_size)];
+          float grad = grad_activations[flattened_index(batch_num,
+                                                        out_channel,
+                                                        channels_out,
+                                                        h_out,
+                                                        H_out,
+                                                        w_out,
+                                                        W_out)];
+          grad_sum += weight * grad;
+        }
+      }
+    }
+  }
+
+  grad_inputs[flattened_index(
+      batch_num, in_channel, channels_in, h_in, H_in, w_in, W_in)] = grad_sum;
+}
+
+__global__ void convolution_backward_weights(float *grad_activations,
+                                             float *inputs,
+                                             float *grad_weights,
+                                             int batch_size,
+                                             int kernel_size,
+                                             int channels_in,
+                                             int channels_out,
+                                             int H_out,
+                                             int W_out,
+                                             int H_in,
+                                             int W_in,
+                                             int padding,
+                                             int stride) {
+  int in_channel = blockIdx.x;
+  int out_channel = blockIdx.y;
+  int k_idx = blockIdx.z * blockDim.x + threadIdx.x;
+
+  if(k_idx >= kernel_size * kernel_size)
+    return;
+
+  int kh = k_idx / kernel_size;
+  int kw = k_idx % kernel_size;
+
+  float grad_sum = 0.0f;
+
+  for(int batch = 0; batch < batch_size; batch++) {
+    for(int h_out = 0; h_out < H_out; h_out++) {
+      for(int w_out = 0; w_out < W_out; w_out++) {
+        int h_in = h_out * stride - padding + kh - kernel_size / 2;
+        int w_in = w_out * stride - padding + kw - kernel_size / 2;
+
+        if(h_in >= 0 && h_in < H_in && w_in >= 0 && w_in < W_in) {
+          float grad = grad_activations[flattened_index(
+              batch, out_channel, channels_out, h_out, H_out, w_out, W_out)];
+          float input = inputs[flattened_index(
+              batch, in_channel, channels_in, h_in, H_in, w_in, W_in)];
+          grad_sum += grad * input;
+        }
+      }
+    }
+  }
+
+  int weight_idx = flattened_index(
+      in_channel, out_channel, channels_out, kh, kernel_size, kw, kernel_size);
+  atomicAdd(&grad_weights[weight_idx], grad_sum);
+}
+
+__global__ void convolution_backward_bias(float *grad_activations,
+                                          float *grad_weights,
+                                          int batch_size,
+                                          int channels_out,
+                                          int H_out,
+                                          int W_out,
+                                          int weight_offset) {
+  int out_channel = blockIdx.x;
+
+  float grad_sum = 0.0f;
+  for(int batch = 0; batch < batch_size; batch++) {
+    for(int h = 0; h < H_out; h++) {
+      for(int w = 0; w < W_out; w++) {
+        grad_sum += grad_activations[flattened_index(
+            batch, out_channel, channels_out, h, H_out, w, W_out)];
+      }
+    }
+  }
+
+  atomicAdd(&grad_weights[weight_offset + out_channel], grad_sum);
+}
+
+void convolve_backward(float *grad_activations,
+                       float *inputs,
+                       float *weights,
+                       float *grad_inputs,
+                       float *grad_weights,
+                       int batch_size,
+                       int kernel_size,
+                       int channels_in,
+                       int channels_out,
+                       int H_out,
+                       int W_out,
+                       int H_in,
+                       int W_in,
+                       int padding,
+                       int stride) {
+
+  cudaStream_t stream1, stream2, stream3;
+  cudaStreamCreate(&stream1);
+  cudaStreamCreate(&stream2);
+  cudaStreamCreate(&stream3);
+  int in_image_size = H_in * W_in;
+  dim3 blockDim_input(1024, 1);
+  dim3 gridDim_input(channels_in, (in_image_size + 1023) / 1024, batch_size);
+
+  convolution_backward_input<<<gridDim_input, blockDim_input, 0, stream1>>>(
+      grad_activations,
+      weights,
+      grad_inputs,
+      batch_size,
+      kernel_size,
+      channels_in,
+      channels_out,
+      H_out,
+      W_out,
+      H_in,
+      W_in,
+      padding,
+      stride);
+
+  int k_squared = kernel_size * kernel_size;
+  dim3 blockDim_weight(256, 1);
+  dim3 gridDim_weight(channels_in, channels_out, (k_squared + 255) / 256);
+
+  convolution_backward_weights<<<gridDim_weight, blockDim_weight, 0, stream2>>>(
+      grad_activations,
+      inputs,
+      grad_weights,
+      batch_size,
+      kernel_size,
+      channels_in,
+      channels_out,
+      H_out,
+      W_out,
+      H_in,
+      W_in,
+      padding,
+      stride);
+
+  dim3 gridDim_bias(channels_out, 1);
+  dim3 blockDim_bias(1, 1);
+
+  convolution_backward_bias<<<gridDim_bias, blockDim_bias, 0, stream3>>>(
+      grad_activations,
+      grad_weights,
+      batch_size,
+      channels_out,
+      H_out,
+      W_out,
+      channels_in * channels_out * kernel_size * kernel_size);
+  cudaDeviceSynchronize();
+
+  cudaStreamDestroy(stream1);
+  cudaStreamDestroy(stream2);
+  cudaStreamDestroy(stream3);
+}
+
 void cuda_concat(float *activations_1,
                  float *activations_2,
                  float *activations,
@@ -217,6 +416,9 @@ __global__ void max_pool(const float *inputs,
   int num_channels = blockDim.z;
   int h_out = blockIdx.x * blockDim.x + threadIdx.x;
   int w_out = blockIdx.y * blockDim.y + threadIdx.y;
+  if(h_out >= in_height / stride || w_out >= in_width / stride) {
+    return;
+  }
   int h_in = h_out * stride;
   int w_in = w_out * stride;
   float max = INFINITY;
@@ -265,10 +467,111 @@ void cuda_max_pool(const float *inputs,
   dim3 gridDim(in_height / stride / blockDim.x,
                in_width / stride / blockDim.y,
                batch_size);
+  if(gridDim.x == 0) {
+    gridDim.x++;
+  }
+  if(gridDim.y == 0) {
+    gridDim.y++;
+  }
   max_pool<<<gridDim, blockDim>>>(
       inputs, activations, stride, kernel_size, in_height, in_width);
 }
 
+__global__ void max_pool_backward(const float *grad_activations,
+                                  const float *inputs,
+                                  const float *activations,
+                                  float *grad_inputs,
+                                  int stride,
+                                  int kernel_size,
+                                  int in_height,
+                                  int in_width) {
+  int batch = blockIdx.z;
+  int channel = threadIdx.z;
+  int num_channels = blockDim.z;
+  int h_out = blockIdx.x * blockDim.x + threadIdx.x;
+  int w_out = blockIdx.y * blockDim.y + threadIdx.y;
+  if(h_out >= in_height / stride || w_out >= in_width / stride) {
+    return;
+  }
+  int h_in = h_out * stride;
+  int w_in = w_out * stride;
+
+  int out_height = in_height / stride;
+  int out_width = in_width / stride;
+
+  float max_val = activations[flattened_index(
+      batch, channel, num_channels, h_out, out_height, w_out, out_width)];
+
+  float grad = grad_activations[flattened_index(
+      batch, channel, num_channels, h_out, out_height, w_out, out_width)];
+
+#pragma unroll
+  for(int i = 0; i < kernel_size; i++) {
+#pragma unroll
+    for(int j = 0; j < kernel_size; j++) {
+      int h_in_loop = h_in + i;
+      int w_in_loop = w_in + j;
+      if(h_in_loop < in_height && w_in_loop < in_width) {
+        float val = inputs[flattened_index(batch,
+                                           channel,
+                                           num_channels,
+                                           h_in_loop,
+                                           in_height,
+                                           w_in_loop,
+                                           in_width)];
+        if(val == max_val) {
+          grad_inputs[flattened_index(batch,
+                                      channel,
+                                      num_channels,
+                                      h_in_loop,
+                                      in_height,
+                                      w_in_loop,
+                                      in_width)] = grad;
+          return;
+        }
+      }
+    }
+  }
+}
+
+void cuda_max_pool_backward(const float *grad_activations,
+                            const float *inputs,
+                            const float *activations,
+                            float *grad_inputs,
+                            int batch_size,
+                            int stride,
+                            int kernel_size,
+                            int in_channels,
+                            int in_height,
+                            int in_width) {
+  if(in_channels > 1024) {
+    throw std::runtime_error(
+        "Max pool backward cannot handle more than 1024 channels");
+  }
+
+  cudaMemset(grad_inputs,
+             0,
+             batch_size * in_channels * in_height * in_width * sizeof(float));
+
+  dim3 blockDim(1, 1024 / in_channels, in_channels);
+  dim3 gridDim(in_height / stride / blockDim.x,
+               in_width / stride / blockDim.y,
+               batch_size);
+  if(gridDim.x == 0) {
+    gridDim.x++;
+  }
+  if(gridDim.y == 0) {
+    gridDim.y++;
+  }
+  max_pool_backward<<<gridDim, blockDim>>>(grad_activations,
+                                           inputs,
+                                           activations,
+                                           grad_inputs,
+                                           stride,
+                                           kernel_size,
+                                           in_height,
+                                           in_width);
+}
 __global__ void upsample(const float *inputs,
                          const float *weights,
                          float *activations,
@@ -361,25 +664,101 @@ void cuda_upsample(const float *inputs,
       out_image_size * batch_size * num_out_channels);
 }
 
-__global__ void relu(float *activations, int num_activations) {
+__global__ void relu(float *inputs, float *activations, int num_activations) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x +
             blockIdx.y * blockDim.x * gridDim.x;
-  if(idx < num_activations && activations[idx] < 0) {
-    activations[idx] = 0;
+  if(idx < num_activations) {
+    float val = inputs[idx];
+    if(val > 0) {
+      activations[idx] = val;
+    } else {
+      activations[idx] = 0;
+    }
   }
 }
 
-void cuda_relu(float *activations, int num_activations) {
+void cuda_relu(float *inputs, float *activations, int num_activations) {
   int num_blocks = num_activations / 1024;
   if(num_activations % 1024 != 0) {
     num_blocks++;
   }
   dim3 gridDim(num_blocks, 1);
   dim3 blockDim(1024, 1);
-  relu<<<gridDim, blockDim>>>(activations, num_activations);
+  relu<<<gridDim, blockDim>>>(inputs, activations, num_activations);
 }
 
-__global__ void BN_inference(float *activations,
+__global__ void
+sigmoid(float *inputs, float *activations, int num_activations) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x +
+            blockIdx.y * blockDim.x * gridDim.x;
+  if(idx < num_activations) {
+    activations[idx] = sigmoid(inputs[idx]);
+  }
+}
+
+void cuda_sigmoid(float *inputs, float *activations, int num_activations) {
+  int num_blocks = num_activations / 1024;
+  if(num_activations % 1024 != 0) {
+    num_blocks++;
+  };
+  dim3 gridDim(num_blocks, 1);
+  dim3 blockDim(1024, 1);
+  sigmoid<<<gridDim, blockDim>>>(inputs, activations, num_activations);
+}
+
+__global__ void sigmoid_backward(float *grad_activations,
+                                 float *activations,
+                                 float *grad_inputs,
+                                 int num_activations) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x +
+            blockIdx.y * blockDim.x * gridDim.x;
+  if(idx < num_activations) {
+    float sig = activations[idx];
+    grad_inputs[idx] = grad_activations[idx] * sig * (1.0f - sig);
+  }
+}
+
+void cuda_sigmoid_backward(float *grad_activations,
+                           float *activations,
+                           float *grad_inputs,
+                           int num_activations) {
+  int num_blocks = num_activations / 1024;
+  if(num_activations % 1024 != 0) {
+    num_blocks++;
+  }
+  dim3 gridDim(num_blocks, 1);
+  dim3 blockDim(1024, 1);
+  sigmoid_backward<<<gridDim, blockDim>>>(
+      grad_activations, activations, grad_inputs, num_activations);
+}
+
+__global__ void relu_backward(float *grad_activations,
+                              float *inputs,
+                              float *grad_inputs,
+                              int num_activations) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x +
+            blockIdx.y * blockDim.x * gridDim.x;
+  if(idx < num_activations) {
+    grad_inputs[idx] = (inputs[idx] > 0) ? grad_activations[idx] : 0.0f;
+  }
+}
+
+void cuda_relu_backward(float *grad_activations,
+                        float *inputs,
+                        float *grad_inputs,
+                        int num_activations) {
+  int num_blocks = num_activations / 1024;
+  if(num_activations % 1024 != 0) {
+    num_blocks++;
+  }
+  dim3 gridDim(num_blocks, 1);
+  dim3 blockDim(1024, 1);
+  relu_backward<<<gridDim, blockDim>>>(
+      grad_activations, inputs, grad_inputs, num_activations);
+}
+
+__global__ void BN_inference(float *inputs,
+                             float *activations,
                              float *weights,
                              float *stats,
                              int H,
@@ -395,12 +774,13 @@ __global__ void BN_inference(float *activations,
   float bias = weights[out_channel * 2 + 1];
   float weight = weights[out_channel * 2];
   int idx = flattened_index(1, out_channel, num_channels, h_out, H, w_out, W);
-  activations[idx] = weight * ((activations[idx] - stats[out_channel * 2]) /
+  activations[idx] = weight * ((inputs[idx] - stats[out_channel * 2]) /
                                stats[out_channel * 2 + 1]) +
                      bias;
 };
 
-void cuda_BN_inference(float *activations,
+void cuda_BN_inference(float *inputs,
+                       float *activations,
                        float *weights,
                        float *BN_stats,
                        int H,
@@ -424,11 +804,11 @@ void cuda_BN_inference(float *activations,
     gridDim.y = 1;
   }
   BN_inference<<<gridDim, blockDim>>>(
-      activations, weights, BN_stats, H, W, num_channels);
+      inputs, activations, weights, BN_stats, H, W, num_channels);
 }
 
 __global__ void BN_train_stats(
-    float *activations, float *BN_batch_stats, int num_channels, int H, int W) {
+    float *inputs, float *BN_batch_stats, int num_channels, int H, int W) {
   int channel = blockIdx.z;
   int spatial_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if(spatial_idx >= H * W)
@@ -436,14 +816,15 @@ __global__ void BN_train_stats(
   int batch_idx = blockIdx.y;
   int h = spatial_idx / W;
   int w = spatial_idx % W;
-  int val = activations[flattened_index(
-      batch_idx, channel, num_channels, h, H, w, W)];
+  int val =
+      inputs[flattened_index(batch_idx, channel, num_channels, h, H, w, W)];
 
   atomicAdd(&BN_batch_stats[channel * 2], val);
   atomicAdd(&BN_batch_stats[channel * 2 + 1], val * val);
 }
 
-__global__ void BN_train_normalize(float *activations,
+__global__ void BN_train_normalize(float *inputs,
+                                   float *activations,
                                    float *BN_batch_stats,
                                    float *BN_stats,
                                    float *weights,
@@ -465,10 +846,10 @@ __global__ void BN_train_normalize(float *activations,
   int bias = weights[channel * 2 + 1];
   activations[flattened_index(batch_idx, channel, num_channels, h, H, w, W)] =
       weight *
-          (activations[flattened_index(
+          (inputs[flattened_index(
                batch_idx, channel, num_channels, h, H, w, W)] -
            mean) /
-          sqrt(var) +
+          sqrtf(var) +
       bias;
   if(spatial_idx == 0 && batch_idx == 0) {
     BN_stats[channel * 2] =
@@ -478,7 +859,8 @@ __global__ void BN_train_normalize(float *activations,
   }
 }
 
-void cuda_BN_train(float *activations,
+void cuda_BN_train(float *inputs,
+                   float *activations,
                    float *weights,
                    float *BN_batch_stats,
                    float *BN_stats,
@@ -491,9 +873,10 @@ void cuda_BN_train(float *activations,
     gridDim.x++;
   dim3 blockDim(1024, 1);
   BN_train_stats<<<gridDim, blockDim>>>(
-      activations, BN_batch_stats, num_channels, H, W);
+      inputs, BN_batch_stats, num_channels, H, W);
 
-  BN_train_normalize<<<gridDim, blockDim>>>(activations,
+  BN_train_normalize<<<gridDim, blockDim>>>(inputs,
+                                            activations,
                                             BN_batch_stats,
                                             BN_stats,
                                             weights,
@@ -503,7 +886,90 @@ void cuda_BN_train(float *activations,
                                             batch_size);
 }
 
-__device__ inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
+__global__ void BN_backward(float *grad_activations,
+                            float *inputs,
+                            float *BN_batch_stats,
+                            float *weights,
+                            float *grad_inputs,
+                            float *grad_weights,
+                            int H,
+                            int W,
+                            int num_channels,
+                            int batch_size) {
+  int channel = blockIdx.z;
+  int spatial_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(spatial_idx >= H * W)
+    return;
+  int batch_idx = blockIdx.y;
+  int h = spatial_idx / W;
+  int w = spatial_idx % W;
+
+  int idx = flattened_index(batch_idx, channel, num_channels, h, H, w, W);
+
+  float mean = BN_batch_stats[channel * 2] / (H * W * batch_size);
+  float var =
+      (BN_batch_stats[channel * 2 + 1] / (H * W * batch_size)) - mean * mean;
+  float std = sqrt(var + 1e-5f);
+
+  float x = inputs[idx];
+  float x_norm = (x - mean) / std;
+  float gamma = weights[channel * 2];
+
+  float grad_out = grad_activations[idx];
+
+  atomicAdd(&grad_weights[channel * 2 + 1], grad_out);
+  atomicAdd(&grad_weights[channel * 2], grad_out * x_norm);
+
+  float N = H * W * batch_size;
+  float grad_x_norm = grad_out * gamma;
+
+  __shared__ float shared_grad_mean;
+  __shared__ float shared_grad_var;
+  if(threadIdx.x == 0 && batch_idx == 0) {
+    shared_grad_mean = 0.0f;
+    shared_grad_var = 0.0f;
+  }
+  __syncthreads();
+
+  atomicAdd(&shared_grad_mean, grad_x_norm);
+  atomicAdd(&shared_grad_var, grad_x_norm * (x - mean));
+  __syncthreads();
+
+  float grad_mean = -shared_grad_mean / (std * N);
+  float grad_var = -shared_grad_var / (2.0f * var * std * N);
+
+  grad_inputs[idx] =
+      grad_x_norm / std + grad_var * 2.0f * (x - mean) / N + grad_mean / N;
+}
+
+void cuda_BN_backward(float *grad_activations,
+                      float *inputs,
+                      float *BN_batch_stats,
+                      float *weights,
+                      float *grad_inputs,
+                      float *grad_weights,
+                      int num_channels,
+                      int H,
+                      int W,
+                      int batch_size) {
+  dim3 gridDim(H * W / 1024, batch_size, num_channels);
+  if(H * W % 1024 != 0)
+    gridDim.x++;
+  dim3 blockDim(1024, 1);
+
+  cudaMemset(grad_weights, 0, num_channels * 2 * sizeof(float));
+
+  BN_backward<<<gridDim, blockDim>>>(grad_activations,
+                                     inputs,
+                                     BN_batch_stats,
+                                     weights,
+                                     grad_inputs,
+                                     grad_weights,
+                                     H,
+                                     W,
+                                     num_channels,
+                                     batch_size);
+}
 
 __global__ void attention_psi_and_sigmoid(float *activations_int_1,
                                           float *weights,
@@ -512,7 +978,6 @@ __global__ void attention_psi_and_sigmoid(float *activations_int_1,
                                           int H_g,
                                           int W_g,
                                           int x_plus_g_channels) {
-  int out_channel = blockIdx.z;
   int spatial_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if(spatial_idx >= H_g * W_g)
     return;
@@ -676,14 +1141,13 @@ void cuda_attention(float *activations_int_1,
   attention_resample<<<gridDim, blockDim>>>(
       activations_int_2, activations, input_x, H_x, W_x, channels_in_x);
 }
-__global__ void dice_loss(float *mask,
-                          float *prediction,
-                          float *X_and_Y,
-                          float *X,
-                          float *Y,
-                          int H,
-                          int W,
-                          int batch_size) {
+
+__global__ void dice_score(float *mask,
+                           float *prediction,
+                           float *loss_values,
+                           int H,
+                           int W,
+                           int batch_size) {
   int spatial_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if(spatial_idx >= H * W)
     return;
@@ -692,27 +1156,94 @@ __global__ void dice_loss(float *mask,
   int w = spatial_idx % W;
   float x = mask[flattened_index(batch_idx, 0, 1, h, H, w, W)];
   float y = prediction[flattened_index(batch_idx, 0, 1, h, H, w, W)];
-  atomicAdd(X_and_Y, x * y);
-  atomicAdd(X, x);
-  atomicAdd(Y, y);
+  atomicAdd(&loss_values[0], x * y);
+  atomicAdd(&loss_values[1], x);
+  atomicAdd(&loss_values[2], y);
 }
 
-float cuda_dice_loss(float *mask,
-                     float *prediction,
-                     int H,
-                     int W,
-                     int batch_size,
-                     float *loss_val) {
+float cuda_dice_score(float *mask,
+                      float *prediction,
+                      int H,
+                      int W,
+                      int batch_size,
+                      float *loss_values) {
   int proj_image_size = H * W;
   dim3 blockDim(1024);
   dim3 gridDim(proj_image_size / 1024, batch_size);
   if(proj_image_size % 1024 != 0) {
     gridDim.x++;
   }
-  float *x_and_y;
-  float *x = 0;
-  float *y = 0;
-  dice_loss<<<gridDim, blockDim>>>(
-      mask, prediction, &x_and_y, &x, &y, H, W, batch_size);
-  return 2 * x_and_y /
+  cudaMemset(loss_values, 0, 3 * sizeof(float));
+  dice_score<<<gridDim, blockDim>>>(
+      mask, prediction, loss_values, H, W, batch_size);
+  float cpu_loss_values[3];
+  cudaMemcpy(
+      cpu_loss_values, loss_values, 3 * sizeof(float), cudaMemcpyDeviceToHost);
+  if(cpu_loss_values[1] == 0 && cpu_loss_values[2] == 0) {
+    return 1;
+  }
+  return 2 * cpu_loss_values[0] / (cpu_loss_values[1] + cpu_loss_values[2]);
 }
+
+__global__ void dice_loss_backward(float *mask,
+                                   float *prediction,
+                                   float *loss_values,
+                                   float *grad_prediction,
+                                   int H,
+                                   int W,
+                                   int batch_size) {
+  int spatial_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(spatial_idx >= H * W)
+    return;
+  int batch_idx = blockIdx.y;
+  int h = spatial_idx / W;
+  int w = spatial_idx % W;
+
+  int idx = flattened_index(batch_idx, 0, 1, h, H, w, W);
+  float x = mask[idx];
+  
+  float intersection = loss_values[0];
+  float sum_mask = loss_values[1];
+  float sum_pred = loss_values[2];
+  float denominator = sum_mask + sum_pred;
+
+  float grad =
+      2.0f * (x * denominator - intersection) / (denominator * denominator);
+  grad_prediction[idx] = -grad;
+}
+
+void cuda_dice_loss_backward(float *mask,
+                             float *prediction,
+                             float *loss_values,
+                             float *dLdY,
+                             int H,
+                             int W,
+                             int batch_size) {
+  int proj_image_size = H * W;
+  dim3 blockDim(1024);
+  dim3 gridDim(proj_image_size / 1024, batch_size);
+  if(proj_image_size % 1024 != 0) {
+    gridDim.x++;
+  }
+
+  dice_loss_backward<<<gridDim, blockDim>>>(
+      mask, prediction, loss_values, dLdY, H, W, batch_size);
+}
+
+void cuda_concat_backward(
+    float *dLdY, float *dLdX, int H, int W, int C1, int C2, int batch_size) {
+  int HxW = H * W;
+  int C_tot = C1 + C2;
+  for(int i = 0; i < batch_size; i++) {
+    cudaMemcpy(dLdX + i * C1 * HxW,
+               dLdY + i * C_tot * HxW,
+               C1 * HxW * sizeof(float),
+               cudaMemcpyDeviceToDevice);
+    cudaMemcpy((dLdX + batch_size * C1 * HxW) + i * C2 * HxW,
+               dLdY + i * C_tot * HxW + C1 * HxW,
+               C2 * HxW * sizeof(float),
+               cudaMemcpyDeviceToDevice);
+  }
+}
+
+void cudaSetZero(float *arr, int num_floats) { cudaMemset(arr, 0, num_floats); }

@@ -1,8 +1,10 @@
+#ifndef UPSAMPLING_UNET_FUNCS
+#define UPSAMPLING_UNET_FUNCS
+
 #include "BN_functions.h"
 #include "activation_functions.h"
 #include "cuda_lib.h"
 #include "layer.h"
-
 
 inline void Layer::forward_upsample(float *input,
                                     int batch_size,
@@ -14,7 +16,7 @@ inline void Layer::forward_upsample(float *input,
   int num_activations = out_image_size * in_channels * out_channels;
   cuda_upsample(input,
                 parameters,
-                activations,
+                activations_int_1,
                 scale,
                 in_channels,
                 out_channels,
@@ -23,10 +25,16 @@ inline void Layer::forward_upsample(float *input,
                 batch_size);
 
   if(inference) {
-    forward_batch_norm_inference(
-        activations, parameters, BN_stats, out_channels, out_height, out_width);
+    forward_batch_norm_inference(activations_int_1,
+                                 activations_int_2,
+                                 parameters,
+                                 BN_stats,
+                                 out_channels,
+                                 out_height,
+                                 out_width);
   } else {
-    forward_batch_norm_training(activations,
+    forward_batch_norm_training(activations_int_1,
+                                activations_int_2,
                                 parameters,
                                 BN_stats,
                                 BN_batch_stats,
@@ -35,5 +43,7 @@ inline void Layer::forward_upsample(float *input,
                                 out_width,
                                 batch_size);
   }
-  forward_relu(activations, num_activations);
+  forward_relu(activations_int_2, activations, num_activations);
 }
+
+#endif

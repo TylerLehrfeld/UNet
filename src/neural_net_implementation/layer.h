@@ -4,10 +4,20 @@
 #include "cuda_lib.h"
 #include <cassert>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+int shape_size(const std::vector<int> &shape) {
+  int s = 1;
+  for(int d : shape) {
+    s *= d;
+  }
+  return s;
+}
+
 enum Layer_type {
   CONV_LAYER,
   BN_LAYER,
@@ -39,13 +49,13 @@ public:
     if(layer_type == CONV_LAYER) {
       init_conv_layer(desc);
     } else if(layer_type == BN_LAYER) {
-      // TODO
+      // TODO: NOT DOING FOR THIS PROJECT
     } else if(layer_type == MAX_POOL_LAYER) {
       init_max_pool(desc);
     } else if(layer_type == ATTENTION_LAYER) {
       init_attention_layer(desc);
     } else if(layer_type == FC_LAYER) {
-      // TODO
+      // TODO: NOT DOINT FOR THIS PROJECT
     } else if(layer_type == CONCAT_LAYER) {
       init_concat_layer(desc);
     } else if(layer_type == UPSAMPLING_LAYER) {
@@ -95,17 +105,99 @@ public:
         forward_upsample(prev_activations, batch_size, true, true, inference);
       }
     } else if(layer_type == ATTENTION_LAYER) {
-      // TODO
+      float *x_inputs = parents[0]->activations;
+      float *g_inputs = parents[1]->activations;
+      forward_attention(x_inputs, g_inputs, batch_size);
     }
 
     done = true;
   }
-  void backward();
+  void backward(float *dLdY, int batch_size, float *original_inputs) {
+    float *inputs;
+    if(parents.size() == 0) {
+      float *inputs = original_inputs;
+    } else {
+      float *inputs = parents[0]->activations;
+    }
+    if(layer_type == CONV_LAYER) {
+      backward_convolution(dLdY, inputs, batch_size);
+    } else if(layer_type == CONCAT_LAYER) {
+      float *inputs_2 = parents[1]->activations;
+      backward_concat(dLdY, inputs, inputs_2, batch_size);
+      int size_prev = batch_size * shape_size(parents[0]->output_shape);
+      parents[1]->backward(dLdX + size_prev, batch_size, original_inputs);
+    } else if(layer_type == MAX_POOL_LAYER) {
+      backward_max_pool(dLdY, inputs, batch_size);
+    }
+
+    parents[0]->backward(dLdX, batch_size, original_inputs);
+  }
+  void step() {}
+  void zero_grad(int batch_size) {
+
+    int size_prev = batch_size * shape_size(input_shape);
+    if(layer_type == CONV_LAYER) {
+
+      int size_out = batch_size * shape_size(output_shape);
+      cudaSetZero(dLdX, size_prev);
+      cudaSetZero(grad_activations_int_1, size_out);
+      cudaSetZero(grad_activations_int_2, size_out);
+      cudaSetZero(dLdW, num_weights_and_biases + num_BN_params);
+    } else if(layer_type == CONCAT_LAYER) {
+      cudaSetZero(dLdX, size_prev);
+    } else if(layer_type == MAX_POOL_LAYER) {
+      cudaSetZero(dLdX, size_prev);
+    }
+  }
+  void init_gradient_parameters_and_activation_arrays(int batch_size) {
+
+    int size_prev = batch_size * shape_size(input_shape);
+    if(layer_type == CONV_LAYER) {
+      int size_out = batch_size * shape_size(output_shape);
+      dLdX = getCudaPointer(size_prev);
+      grad_activations_int_1 = getCudaPointer(size_out);
+      grad_activations_int_2 = getCudaPointer(size_out);
+      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
+      activations_int_1 = getCudaPointer(batch_size * shape_size(output_shape));
+      activations_int_2 = getCudaPointer(batch_size * shape_size(output_shape));
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+    } else if(layer_type == CONCAT_LAYER) {
+      dLdX = getCudaPointer(size_prev);
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+    } else if(layer_type == MAX_POOL_LAYER) {
+      dLdX = getCudaPointer(size_prev);
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+    } else if(layer_type == UPSAMPLING_LAYER) {
+      int size_out = batch_size * shape_size(output_shape);
+      dLdX = getCudaPointer(size_prev);
+      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
+      grad_activations_int_1 = getCudaPointer(size_out);
+      grad_activations_int_2 = getCudaPointer(size_out); 
+      activations_int_1 = getCudaPointer(batch_size * shape_size(output_shape));
+      activations_int_2 = getCudaPointer(batch_size * shape_size(output_shape));
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+    } else if(layer_type == ATTENTION_LAYER) {
+      int size_prev =
+          batch_size * (input_shape[0] * input_shape[1] * input_shape[2] +
+                        input_shape[3] * input_shape[4] * input_shape[5]);
+      dLdX = getCudaPointer(size_prev);
+      dLdW = getCudaPointer(num_weights_and_biases);
+      int intermediate_size =
+          input_shape[0] / 2 * input_shape[1] / 2 * input_shape[2] / 2;
+      activations_int_1 = getCudaPointer(batch_size * intermediate_size);
+      activations_int_2 =
+          getCudaPointer(batch_size * input_shape[1] / 2 * input_shape[2] / 2);
+      activations = getCudaPointer(batch_size * shape_size(input_shape));
+    }
+  }
+  float *dLdX;
+
+  float *dLdW;
   float *activations;
   std::vector<Layer *> parents;
   Layer_type layer_type;
   Activation_type activation_type;
-  
+
   bool done;
 
 private:
@@ -120,18 +212,31 @@ private:
   int stride;
   int out_height;
   int out_width;
+  int num_weights_and_biases = 0;
+  int num_BN_params = 0;
   bool batch_norm;
-  Activation_type activation_type;
   float *BN_parameters;
   float *BN_stats;
   float *BN_batch_stats;
   float *activations_int_1;
   float *activations_int_2;
+  float *grad_activations_int_1;
+  float *grad_activations_int_2;
   void forward_convolution(float *input,
                            int batch_size,
                            bool use_relu_activation,
                            bool use_batch_norm,
                            bool inference);
+
+  void
+  backward_convolution(float *grad_activations, float *input, int batch_size);
+  void backward_concat(float *grad_activations,
+                       float *input_1,
+                       float *input_2,
+                       int batch_size);
+
+  void backward_max_pool(float *dLdY, float *inputs, int batch_size);
+
   void forward_upsample(float *input,
                         int batch_size,
                         bool use_relu_activation,
@@ -148,7 +253,7 @@ private:
           "Convolution layers cannot have more than one parent");
     }
     int num_weights;
-    int num_weights_and_biases;
+
     int output_size;
     // Here we translate the shape descriptor to real parameters:
     // WARNING: Changing the order of these values may result in problems in
@@ -163,7 +268,7 @@ private:
     kernel_size = description[i++];
     padding = description[i++];
     stride = description[i++];
-    batch_norm = description[i++] == 0 ? false : true;
+    batch_norm = true;
     activation_type = desc.activation;
     num_weights = kernel_size * kernel_size * in_channels * out_channels;
     int num_biases = out_channels;
@@ -176,6 +281,7 @@ private:
     parameters =
         getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
     BN_parameters = getCudaPointer(out_channels * 2, BN);
+    num_BN_params = out_channels * 2;
     BN_stats = getCudaPointer(out_channels * 2, BN);
     BN_batch_stats = getCudaPointer(out_channels * 2);
   }
@@ -218,7 +324,8 @@ private:
        parents[i++]->output_shape.size() != 3) {
       std::stringstream ss;
       ss << "Parent " << i
-         << " does not have 3 shape parameters C, H, and W. Current shape size "
+         << " does not have 3 shape parameters C, H, and W. Current shape "
+            "size "
             "is "
          << parents[i - 1]->output_shape.size();
       throw std::runtime_error(ss.str());
@@ -226,7 +333,8 @@ private:
     if(parents[0]->output_shape[1] != parents[1]->output_shape[1] ||
        parents[0]->output_shape[2] != parents[1]->output_shape[2]) {
       std::stringstream ss;
-      ss << "Concat layer must have equal heights and widths. Height and width "
+      ss << "Concat layer must have equal heights and widths. Height and "
+            "width "
             "of parent 1: "
          << parents[0]->output_shape[1] << ", " << parents[0]->output_shape[2]
          << " Height and width of parent 2: " << parents[1]->output_shape[1]
@@ -259,7 +367,8 @@ private:
     int x_W = parents[0]->out_width;
     if(g_H != x_H / 2 || g_W != x_W / 2) {
       std::stringstream ss;
-      ss << "attention not implemented for g that is not half the size of x. g "
+      ss << "attention not implemented for g that is not half the size of x. "
+            "g "
             "dimensions: "
          << g_H << ", " << g_W << std::endl
          << "x dimensions: " << x_H << ", " << x_W;
@@ -287,7 +396,7 @@ private:
                       x_in_channels * intermediate_channels +
                       intermediate_channels;
     int num_biases = intermediate_channels + 1;
-    int num_weights_and_biases = num_biases + num_weights;
+    num_weights_and_biases = num_biases + num_weights;
     // TODO determine if this is a good enough initialization
     parameters =
         getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
@@ -327,9 +436,11 @@ private:
     }
     int num_weights = in_channels * out_channels * scale * scale;
     int num_biases = out_channels;
+    num_weights_and_biases = num_weights + num_biases;
     parameters =
         getCudaPointer(num_biases + num_weights, HE, num_weights, num_weights);
     BN_parameters = getCudaPointer(out_channels * 2, BN);
+    num_BN_params = out_channels * 2;
     BN_stats = getCudaPointer(out_channels * 2, BN);
     BN_batch_stats = getCudaPointer(out_channels * 2);
   }

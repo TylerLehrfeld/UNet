@@ -52,8 +52,9 @@ public:
     for(int x : is_parent)
       xorSet ^= x;
     final_layer = xorAll ^ xorSet;
-    //TODO double check this
+    // TODO double check this
     layers[final_layer].activation_type = SIGMOID;
+    loss_values = getCudaPointer(3);
   };
   void train(py::array_t<float> images,
              vector<float> shape,
@@ -61,6 +62,8 @@ public:
              float learning_rate,
              int epochs,
              int batch_size) {
+    // TODO
+    init_gradient_parameters(batch_size);
     py::buffer_info img_info = images.request();
     py::buffer_info msk_info = masks.request();
 
@@ -74,12 +77,7 @@ public:
        (W != msk_info.shape[2])) {
       throw std::runtime_error("Mask dimensions do not equal image dimensions");
     }
-    // std::cout << "recieved images" << std::endl;
-    // int n = 2;
-    // int c = 1;
-    // int h = 40;
-    // int w = 30;
-    // std::cout << img_ptr[n * C * H * W + c * H * W + h * W + w] << std::endl;
+
     for(int epoch = 0; epoch < epochs; epoch++) {
       std::cout << "beggining epoch " << epoch << "/" << epochs << std::endl;
       float total_loss = 0;
@@ -91,18 +89,15 @@ public:
         if(batch_start_ind + batch_size > N) {
           cur_batch_size = N - batch_start_ind;
         }
+        float* inputs = img_ptr + batch_start_ind * C * H * W; 
         float *output_map =
-            forward(img_ptr + batch_start_ind * C * H * W, batch_size, false);
-        float dice_score;
-        loss(output_map,
-             msk_ptr + batch_start_ind * H * W,
-             batch_size,
-             H,
-             W,
-             dice_score);
-        total_dice_score += dice_score;
-        total_loss += *loss_val;
-        backward();
+            forward(inputs, batch_size, false);
+        float diceScore = dice_score(
+            output_map, msk_ptr + batch_start_ind * H * W, batch_size, H, W);
+        total_dice_score += diceScore;
+        total_loss += 1 - diceScore;
+        backward(msk_ptr + batch_start_ind * H * W, output_map,inputs, batch_size);
+        step(batch_size);
       }
       std::cout << "ephoch " << epoch << " done." << std::endl;
       std::cout << "average loss: " << total_loss / N << std::endl;
@@ -111,8 +106,9 @@ public:
   };
 
 private:
-  float *loss_val;
+  float *loss_values;
   vector<Layer> layers;
+  float *dLdY;
   float *forward(float *input, int batch_size, bool inference) {
     if(batch_size < 1) {
       throw std::runtime_error("Batch size must be greater than 0");
@@ -123,15 +119,36 @@ private:
     layers[final_layer].forward(input, batch_size, inference);
     return layers[final_layer].activations;
   }
-  void backward() {}
-  float loss(float *final_map,
-             float *y,
-             int batch_size,
-             int H,
-             int W,
-             float &dice_score) {
-    return cuda_dice_loss();
+
+  void init_gradient_parameters(int batch_size) {
+    // Init loss function parameters
+    int H = layers[final_layer].output_shape[1];
+    int W = layers[final_layer].output_shape[2];
+    dLdY = getCudaPointer(batch_size * H * W);
+    for(Layer layer : layers) {
+      layer.init_gradient_parameters_and_activation_arrays(batch_size);
+    }
   }
+  void backward(float *mask, float *y, float* original_inputs, int batch_size) {
+    loss_backwards(mask, y, batch_size);
+    layers[final_layer].backward(dLdY, batch_size,original_inputs);
+  }
+  void step(int batch_size) {
+    for(Layer layer : layers) {
+      layer.step();
+      layer.zero_grad(batch_size);
+    }
+  }
+  float dice_score(float *final_map, float *y, int batch_size, int H, int W) {
+    return cuda_dice_score(y, final_map, H, W, batch_size, loss_values);
+  }
+
+  void loss_backwards(float *mask, float *y, int batch_size) {
+    int H = layers[final_layer].output_shape[1];
+    int W = layers[final_layer].output_shape[2];
+    cuda_dice_loss_backward(mask, y, loss_values, dLdY, H, W, batch_size);
+  }
+
   int final_layer;
 };
 
