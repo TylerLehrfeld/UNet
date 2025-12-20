@@ -1,9 +1,14 @@
+#include "addProcess.h"
 #include "attention_layer_functions.h"
 #include "concat_layer_functions.h"
 #include "convolution_layer_functions.h"
 #include "layer.h"
 #include "max_pool_functions.h"
+#include "max_pool_test.h"
+#include "convolution_test.h"
 #include "neural_net.h"
+#include "cuda_lib.h"
+#include "test.h"
 #include "upsampling_layer_functions.h"
 #include <pybind11/detail/common.h>
 #include <pybind11/pybind11.h>
@@ -17,6 +22,12 @@ PYBIND11_MODULE(neural_net, m) {
       .def("train", &NN::train)
       .def("infer", &NN::infer)
       .def("test", &NN::test);
+
+  py::class_<UNetTest>(m, "UNetTest")
+      .def(py::init<>())
+      .def("testConvolution", &UNetTest::testConvolution)
+      .def("testMaxPool", &UNetTest::testMaxPool);
+
   py::enum_<Layer_type>(m, "LayerType")
       .value("MAX_POOL_LAYER", Layer_type::MAX_POOL_LAYER)
       .value("FC_LAYER", Layer_type::FC_LAYER)

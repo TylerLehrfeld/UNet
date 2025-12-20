@@ -16,6 +16,14 @@ Layer::forward_attention(float *input_x, float *input_g, int batch_size) {
                  in_channels,
                  input_shape[3],
                  in_channels / 2);
+
+  cuda_check_err();
+
+  //float gpu_val = cudaValToCPU(activations, 0);
+  //std::cout << "[DEBUG] attention check - GPU value: " << gpu_val << std::endl;
+  if(has_nans(activations, batch_size * shape_size(output_shape))) {
+    std::cout << "HAS NANS" << std::endl;
+  };
 }
 
 inline void Layer::backward_attention(float *grad_activations,
@@ -40,4 +48,10 @@ inline void Layer::backward_attention(float *grad_activations,
                           in_channels,
                           input_shape[3],
                           in_channels / 2);
+  cuda_check_err();
+  if(has_nans(dLdX,
+              batch_size * (shape_size(parents[0]->output_shape) +
+                            shape_size(parents[1]->output_shape)))) {
+    std::cout << "HAS NANS" << std::endl;
+  };
 }

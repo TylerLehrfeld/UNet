@@ -13,7 +13,7 @@ inline void Layer::forward_upsample(float *input,
                                     bool inference) {
   const int scale = kernel_size;
   int out_image_size = scale * scale * in_width * in_height;
-  int num_activations = out_image_size * in_channels * out_channels;
+  int num_activations = batch_size * out_image_size * out_channels;
   cuda_upsample(input,
                 parameters,
                 activations_int_1,
@@ -24,6 +24,11 @@ inline void Layer::forward_upsample(float *input,
                 in_width,
                 batch_size);
 
+  cuda_check_err();
+  // float gpu_val = cudaValToCPU(activations, 0);
+  // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
+  // std::endl;
+
   if(inference) {
     forward_batch_norm_inference(activations_int_1,
                                  activations_int_2,
@@ -32,6 +37,12 @@ inline void Layer::forward_upsample(float *input,
                                  out_channels,
                                  out_height,
                                  out_width);
+
+    cuda_check_err();
+
+    // gpu_val = cudaValToCPU(activations, 0);
+    // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
+    // std::endl;
   } else {
     forward_batch_norm_training(activations_int_1,
                                 activations_int_2,
@@ -42,8 +53,20 @@ inline void Layer::forward_upsample(float *input,
                                 out_height,
                                 out_width,
                                 batch_size);
+
+    cuda_check_err();
+
+    // gpu_val = cudaValToCPU(activations, 0);
+    // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
+    // std::endl;
   }
   forward_relu(activations_int_2, activations, num_activations);
+
+  cuda_check_err();
+
+  // gpu_val = cudaValToCPU(activations, 0);
+  // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
+  // std::endl;
 }
 
 inline void Layer::backward_upsample(float *grad_activations,
@@ -51,7 +74,7 @@ inline void Layer::backward_upsample(float *grad_activations,
                                      int batch_size) {
   const int scale = kernel_size;
   int out_image_size = scale * scale * in_width * in_height;
-  int num_activations = out_image_size * in_channels * out_channels;
+  int num_activations = batch_size * out_image_size * out_channels;
 
   // Backward through ReLU
   cuda_relu_backward(grad_activations,
@@ -59,6 +82,7 @@ inline void Layer::backward_upsample(float *grad_activations,
                      grad_activations_int_2,
                      num_activations);
 
+  cuda_check_err();
   // Backward through batch norm
   cuda_BN_backward(grad_activations_int_2,
                    activations_int_1,
@@ -71,6 +95,7 @@ inline void Layer::backward_upsample(float *grad_activations,
                    out_width,
                    batch_size);
 
+  cuda_check_err();
   // Backward through upsample
   cuda_upsample_backward(grad_activations_int_1,
                          input,
@@ -83,6 +108,8 @@ inline void Layer::backward_upsample(float *grad_activations,
                          in_height,
                          in_width,
                          batch_size);
+
+  cuda_check_err();
 }
 
 #endif

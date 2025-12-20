@@ -12,6 +12,7 @@ add_subdirectory(src/neural_net_implementation)
 include_directories(
     ${CMAKE_SOURCE_DIR}/src/neural_net_implementation
     ${CMAKE_SOURCE_DIR}/src/cuda_library
+    ${CMAKE_SOURCE_DIR}/src/cuda_library/test
 )
 
 # define NN implementation module

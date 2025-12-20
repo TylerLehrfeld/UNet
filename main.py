@@ -78,27 +78,35 @@ if __name__ == "__main__":
     
     images = np.stack([
         np.transpose(item["image"], (2, 0, 1))  # (H,W,C) → (C,H,W)
-        for item in dataset
+        for item in tumor 
     ]).astype(np.float32)                        # final shape [N, 3, 256, 256]
-
+    images = images / 255.0
+    mean = images.mean(axis=(0, 2, 3), keepdims=True)  # per-channel mean
+    std = images.std(axis=(0, 2, 3), keepdims=True)    # per-channel std
+    images = (images - mean) / (std + 1e-7)
     masks = np.stack([
         item["mask"]                             # (H,W)
-        for item in dataset
-    ]).astype(np.float32)                          # final shape [N, 256, 256]
-    images = np.ascontiguousarray(images)
-    masks = np.ascontiguousarray(masks)
+        for item in tumor 
+    ]).astype(np.float32)    
+    if masks.max() > 1.0:
+        masks = masks / 255.0
+    # final shape [N, 256, 256]
+    images = np.ascontiguousarray(images.copy())
+    masks = np.ascontiguousarray(masks.copy())
+
     N, C, H, W = images.shape
     shape = [float(N), float(C), float(H), float(W)]
 
-
 # Split 80% train / 20% test
 train_images, test_images, train_masks, test_masks = train_test_split(
-    images, masks, test_size=0.95, random_state=42, shuffle=True
+    images, masks, test_size=0.15, random_state=42, shuffle=True
 )
+train_masks = np.ascontiguousarray(train_masks)
+train_images = np.ascontiguousarray(train_images)
 
 print(f"Train images: {train_images.shape[0]}")
 print(f"Test images: {test_images.shape[0]}")
-print(f"Train images 0, 1,20,23: {train_images[0][1][20][23]}")
+
 from neural_net import NeuralNet
 from neural_net import LayerType
 from neural_net import LayerDesc
@@ -152,7 +160,7 @@ UNET.create(
         LayerDesc(LayerType.ATTENTION_LAYER, [], [4, 6]),  # 8
         # parameters are fully determined by parents. First parent is from skip/attention, second is from convolution below
         LayerDesc(LayerType.CONCAT_LAYER, [], [8, 7]),  # 9
-        LayerDesc(LayerType.CONV_LAYER, [H3, W3, F3, F2, 3, 1, 1], [9]),  # 10
+        LayerDesc(LayerType.CONV_LAYER, [H3, W3, F4, F2, 3, 1, 1], [9]),  # 10
         LayerDesc(
             LayerType.UPSAMPLING_LAYER, [H3, W3, F2, F2, upsample_factor], [10]
         ),  # 11
@@ -171,6 +179,7 @@ UNET.create(
 
 
 learning_rate = 0.001
-epochs = 10
-batch_size = 2
+epochs = 30
+batch_size = 4
+
 UNET.train(train_images, train_masks, learning_rate, epochs, batch_size)

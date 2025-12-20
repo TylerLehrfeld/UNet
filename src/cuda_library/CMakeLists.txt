@@ -4,11 +4,26 @@ add_library(cuda_lib SHARED
   cuda_ops.cu
 )
 
+
 set_target_properties(cuda_lib PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
 )
 target_link_libraries(cuda_lib PUBLIC CUDA::cudart)
-target_include_directories(cuda_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(cuda_lib PUBLIC 
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ./test/
+)
 
+add_library(cuda_manager_lib SHARED
+  cuda_manager_ops.cu
+)
 
+set_target_properties(cuda_manager_lib PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+)
 
+target_link_libraries(cuda_manager_lib PUBLIC CUDA::cudart)
+
+target_include_directories(cuda_manager_lib PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)

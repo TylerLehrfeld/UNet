@@ -47,7 +47,7 @@ class Layer {
 public:
   Layer(const LayerDesc &desc, std::vector<Layer> &parents_vec) {
     layer_type = desc.type;
-    std::cout << "creating layer. Layer type: " << layer_type << std::endl;
+    // std::cout << "creating layer. Layer type: " << layer_type << std::endl;
     description = desc.descriptor;
     // make sure each layer has access to its parents for initialization
     for(int parent : desc.parents) {
@@ -118,8 +118,14 @@ public:
 
     done = true;
   }
-  void backward(float *dLdY, int batch_size, float *original_inputs) {
+  void backward(int batch_size, float *original_inputs) {
 
+    if(children_seen != num_children || done) {
+      return;
+    }
+    done = true;
+
+    init_gradient_arrays(batch_size);
     float *inputs;
     if(parents.size() == 0) {
       inputs = original_inputs;
@@ -127,24 +133,42 @@ public:
       inputs = parents[0]->activations;
     }
     if(layer_type == CONV_LAYER) {
-      backward_convolution(dLdY, inputs, batch_size);
+      backward_convolution(dLdY_copy, inputs, batch_size);
     } else if(layer_type == CONCAT_LAYER) {
       float *inputs_2 = parents[1]->activations;
-      backward_concat(dLdY, inputs, inputs_2, batch_size);
-      int size_prev = batch_size * shape_size(parents[0]->output_shape);
-      parents[1]->backward(dLdX + size_prev, batch_size, original_inputs);
+      backward_concat(dLdY_copy, inputs, inputs_2, batch_size);
     } else if(layer_type == MAX_POOL_LAYER) {
-      backward_max_pool(dLdY, inputs, batch_size);
+      backward_max_pool(dLdY_copy, inputs, batch_size);
     } else if(layer_type == UPSAMPLING_LAYER) {
-      backward_upsample(dLdY, inputs, batch_size);
+      backward_upsample(dLdY_copy, inputs, batch_size);
     } else if(layer_type == ATTENTION_LAYER) {
       float *inputs_g = parents[1]->activations;
-      backward_attention(dLdY, inputs, inputs_g, batch_size);
+      backward_attention(dLdY_copy, inputs, inputs_g, batch_size);
       int input_x_size = batch_size * shape_size(parents[0]->output_shape);
-      parents[1]->backward(dLdX + input_x_size, batch_size, original_inputs);
     }
+
+    int size_prev = 0;
+    for(int p = 0; p < parents.size(); p++) {
+
+      int size_dLdY = batch_size * shape_size(parents[p]->output_shape);
+      if(parents[p]->children_seen == 0) {
+
+        parents[p]->dLdY_copy = getCudaPointer(size_dLdY);
+
+        cuda_lib_copy_device(
+            dLdX + size_prev, size_dLdY, parents[p]->dLdY_copy);
+      } else {
+        cuda_add_nums(dLdX + size_prev, parents[p]->dLdY_copy, size_dLdY);
+      }
+      size_prev += batch_size * shape_size(parents[p]->output_shape);
+      parents[p]->children_seen++;
+    }
+    free_train_arrs();
+    // std::cout << "backwards for layer type: " << layer_type << std::endl;
     if(parents.size() > 0) {
-      parents[0]->backward(dLdX, batch_size, original_inputs);
+      for(int p = 0; p < parents.size(); p++) {
+        parents[p]->backward(batch_size, original_inputs);
+      }
     }
   }
   void step(float learning_rate, int t) {
@@ -211,79 +235,109 @@ public:
     }
   }
   void free_train_arrs() {
+    cudaLibFree(dLdX);
+    cudaLibFree(dLdY_copy);
     if(layer_type == CONV_LAYER) {
-      cudaLibFree(dLdX);
+      // cudaLibFree(dLdX);
       cudaLibFree(grad_activations_int_1);
       cudaLibFree(grad_activations_int_2);
-      cudaLibFree(dLdW);
+      // cudaLibFree(dLdW);
     } else if(layer_type == CONCAT_LAYER) {
-      cudaLibFree(dLdX);
+      // cudaLibFree(dLdX);
     } else if(layer_type == MAX_POOL_LAYER) {
-      cudaLibFree(dLdX);
+      // cudaLibFree(dLdX);
     } else if(layer_type == UPSAMPLING_LAYER) {
-      cudaLibFree(dLdX);
+      // cudaLibFree(dLdX);
       cudaLibFree(grad_activations_int_1);
       cudaLibFree(grad_activations_int_2);
-      cudaLibFree(dLdW);
+      // cudaLibFree(dLdW);
     } else if(layer_type == ATTENTION_LAYER) {
-      cudaLibFree(dLdX);
+      // cudaLibFree(dLdX);
       cudaLibFree(grad_activations_int_1);
       cudaLibFree(grad_activations_int_2);
-      cudaLibFree(dLdW);
+      // cudaLibFree(dLdW);
     }
   }
 
-  void init_gradient_parameters_and_activation_arrays(int batch_size) {
+  void init_activation_arrays_and_parameters(int batch_size) {
+    int size_prev = batch_size * shape_size(input_shape);
+    if(layer_type == CONV_LAYER) {
+      int size_out = batch_size * shape_size(output_shape);
+      adam_weights =
+          getCudaPointer((num_weights_and_biases + num_BN_params) * 2);
+      activations_int_1 = getCudaPointer(batch_size * shape_size(output_shape));
+      activations_int_2 = getCudaPointer(batch_size * shape_size(output_shape));
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
+    } else if(layer_type == CONCAT_LAYER) {
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+    } else if(layer_type == MAX_POOL_LAYER) {
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+    } else if(layer_type == UPSAMPLING_LAYER) {
+      int size_out = batch_size * shape_size(output_shape);
+      adam_weights =
+          getCudaPointer((num_weights_and_biases + num_BN_params) * 2);
+      activations_int_1 = getCudaPointer(size_out);
+      activations_int_2 = getCudaPointer(size_out);
+      activations = getCudaPointer(size_out);
+      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
+    } else if(layer_type == ATTENTION_LAYER) {
+      int size_prev =
+          batch_size * (input_shape[0] * input_shape[1] * input_shape[2] +
+                        input_shape[3] * input_shape[4] * input_shape[5]);
+
+      adam_weights = getCudaPointer(num_weights_and_biases * 2);
+      int intermediate_size =
+          input_shape[0] / 2 * input_shape[1] / 2 * input_shape[2] / 2;
+
+      activations_int_1 = getCudaPointer(batch_size * intermediate_size);
+
+      activations_int_2 =
+          getCudaPointer(batch_size * input_shape[1] / 2 * input_shape[2] / 2);
+
+      activations = getCudaPointer(batch_size * shape_size(output_shape));
+      dLdW = getCudaPointer(num_weights_and_biases);
+    }
+  }
+
+  void init_gradient_arrays(int batch_size) {
     int size_prev = batch_size * shape_size(input_shape);
     if(layer_type == CONV_LAYER) {
       int size_out = batch_size * shape_size(output_shape);
       dLdX = getCudaPointer(size_prev);
       grad_activations_int_1 = getCudaPointer(size_out);
       grad_activations_int_2 = getCudaPointer(size_out);
-      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
-      adam_weights = getCudaPointer(num_weights_and_biases + num_BN_params * 2);
-      activations_int_1 = getCudaPointer(batch_size * shape_size(output_shape));
-      activations_int_2 = getCudaPointer(batch_size * shape_size(output_shape));
-      activations = getCudaPointer(batch_size * shape_size(output_shape));
+      // dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
     } else if(layer_type == CONCAT_LAYER) {
       dLdX = getCudaPointer(size_prev);
-      activations = getCudaPointer(batch_size * shape_size(output_shape));
     } else if(layer_type == MAX_POOL_LAYER) {
       dLdX = getCudaPointer(size_prev);
-      activations = getCudaPointer(batch_size * shape_size(output_shape));
     } else if(layer_type == UPSAMPLING_LAYER) {
       int size_out = batch_size * shape_size(output_shape);
       dLdX = getCudaPointer(size_prev);
-      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
-      adam_weights = getCudaPointer(num_weights_and_biases + num_BN_params * 2);
+      // dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
       grad_activations_int_1 = getCudaPointer(size_out);
       grad_activations_int_2 = getCudaPointer(size_out);
-      activations_int_1 = getCudaPointer(size_out);
-      activations_int_2 = getCudaPointer(size_out);
-      activations = getCudaPointer(size_out);
     } else if(layer_type == ATTENTION_LAYER) {
       int size_prev =
           batch_size * (input_shape[0] * input_shape[1] * input_shape[2] +
                         input_shape[3] * input_shape[4] * input_shape[5]);
       dLdX = getCudaPointer(size_prev);
-      dLdW = getCudaPointer(num_weights_and_biases);
+      // dLdW = getCudaPointer(num_weights_and_biases);
 
-      adam_weights = getCudaPointer(num_weights_and_biases + 2);
       int intermediate_size =
           input_shape[0] / 2 * input_shape[1] / 2 * input_shape[2] / 2;
 
-      activations_int_1 = getCudaPointer(batch_size * intermediate_size);
-
       grad_activations_int_1 = getCudaPointer(batch_size * intermediate_size);
-      activations_int_2 =
-          getCudaPointer(batch_size * input_shape[1] / 2 * input_shape[2] / 2);
 
       grad_activations_int_2 =
           getCudaPointer(batch_size * input_shape[1] / 2 * input_shape[2] / 2);
-      activations = getCudaPointer(batch_size * shape_size(input_shape));
     }
   }
   float *dLdX;
+  float *dLdY_copy;
+  int num_children;
+  int children_seen;
   float *dLdW;
   float *parameters;
   float *BN_parameters;
@@ -381,11 +435,12 @@ private:
     output_shape = {out_channels, out_height, out_width};
     parameters =
         getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
-    std::cout << cudaValToCPU(parameters, 0) << std::endl;
     BN_parameters = getCudaPointer(out_channels * 2, BN);
     num_BN_params = out_channels * 2;
     BN_stats = getCudaPointer(out_channels * 2, BN);
     BN_batch_stats = getCudaPointer(out_channels * 2);
+    std::cout << "add params: " << num_BN_params + num_weights_and_biases
+              << std::endl;
   }
 
   void init_max_pool(const LayerDesc &desc) {
@@ -402,6 +457,9 @@ private:
     kernel_size = description[i++];
     stride = description[i++];
 
+    out_height = in_height / stride;
+
+    out_width = in_width / stride;
     input_shape = {in_channels, in_height, in_width};
     output_shape = {
         input_shape[0], input_shape[1] / stride, input_shape[2] / stride};
@@ -444,10 +502,10 @@ private:
       throw std::runtime_error(ss.str());
     }
     // C_1, C_2, H, W
-    input_shape = {parents[0]->input_shape[0],
-                   parents[1]->input_shape[0],
-                   parents[0]->input_shape[1],
-                   parents[0]->input_shape[2]};
+    input_shape = {parents[0]->output_shape[0],
+                   parents[1]->output_shape[0],
+                   parents[0]->output_shape[1],
+                   parents[0]->output_shape[2]};
 
     output_shape = parents[0]->output_shape;
     output_shape[0] += parents[1]->output_shape[0];
@@ -502,6 +560,7 @@ private:
     // TODO determine if this is a good enough initialization
     parameters =
         getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
+    std::cout << "add params: " << num_weights_and_biases << std::endl;
   }
 
   void init_upsampling_layer(const LayerDesc &desc) {
@@ -545,6 +604,8 @@ private:
     num_BN_params = out_channels * 2;
     BN_stats = getCudaPointer(out_channels * 2, BN);
     BN_batch_stats = getCudaPointer(out_channels * 2);
+    std::cout << "add params: " << num_weights_and_biases + num_BN_params
+              << std::endl;
   }
 };
 

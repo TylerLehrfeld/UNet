@@ -3,7 +3,9 @@
 #include "cuda_lib.h"
 #include "layer.h"
 #include <cassert>
+#include <cmath>
 #include <cstdint>
+#include <cuda_device_runtime_api.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <set>
@@ -23,7 +25,6 @@ public:
     }
     float *img_ptr = static_cast<float *>(img_info.ptr);
     float *msk_ptr = static_cast<float *>(msk_info.ptr);
-
     int C = img_info.shape[1];
     int H = img_info.shape[2];
     int W = img_info.shape[3];
@@ -102,10 +103,17 @@ public:
     final_layer = xorAll ^ xorSet;
     // TODO double check this
     // layers[final_layer].activation_type = SIGMOID;
-    loss_values = getCudaPointer(3);
+    for(size_t idx = 0; idx < layers.size(); ++idx) {
+      layers[idx].num_children = 0; // initialize
+    }
+    for(const LayerDesc &d : desc) {
+      for(int parent_idx : d.parents) {
+        layers[parent_idx].num_children++;
+      }
+    }
   };
   void train(py::array_t<float> images,
-             py::array_t<uint8_t> masks,
+             py::array_t<float> masks,
              float learning_rate,
              int epochs,
              int batch_size) {
@@ -119,16 +127,15 @@ public:
     int C = img_info.shape[1];
     int H = img_info.shape[2];
     int W = img_info.shape[3];
+
     if((N != msk_info.shape[0]) || (H != msk_info.shape[1]) ||
        (W != msk_info.shape[2])) {
       throw std::runtime_error("Mask dimensions do not equal image dimensions");
     }
     std::cout << "initiating gradient parameters" << std::endl;
-    init_gradient_parameters(batch_size);
+    init_activation_arrays_and_parameters(batch_size);
     std::cout << "done init_gradient_parameters" << std::endl;
     int val;
-    std::cin >> val;
-    return;
     t = 0;
     for(int epoch = 0; epoch < epochs; epoch++) {
       std::cout << "beggining epoch " << epoch << "/" << epochs << std::endl;
@@ -137,26 +144,36 @@ public:
       for(int batch_start_ind = 0; batch_start_ind < N;
           batch_start_ind += batch_size) {
         std::cout << "batch: " << batch_start_ind / batch_size << std::endl;
+
         int cur_batch_size = batch_size;
         if(batch_start_ind + batch_size > N) {
           cur_batch_size = N - batch_start_ind;
         }
+
+        loss_values = getCudaPointer(3 * cur_batch_size);
         float *inputs = img_ptr + batch_start_ind * C * H * W;
-        float *output_map = forward(inputs, batch_size, false);
-        float diceScore = dice_score(
-            output_map, msk_ptr + batch_start_ind * H * W, batch_size, H, W);
+        float *dinputs = getCudaPointer(cur_batch_size * (C * H * W));
+        cuda_lib_copy_to_device(inputs, dinputs, cur_batch_size * C * H * W);
+        float *output_map = forward(dinputs, cur_batch_size, false);
+        float *masks = msk_ptr + batch_start_ind * H * W;
+        float *dmask = getCudaPointer(cur_batch_size * H * W);
+        cuda_lib_copy_to_device(masks, dmask, cur_batch_size * H * W);
+        float diceScore = dice_score(output_map, dmask, cur_batch_size, H, W);
+        std::cout << "Batch diceScore: " << diceScore << std::endl;
         total_dice_score += diceScore;
         total_loss += 1 - diceScore;
-        backward(
-            msk_ptr + batch_start_ind * H * W, output_map, inputs, batch_size);
-        step(batch_size, learning_rate);
+        backward(dmask, output_map, dinputs, cur_batch_size);
+        step(cur_batch_size, learning_rate);
+        cudaLibFree(dinputs);
+        cudaLibFree(dmask);
+        cudaLibFree(loss_values);
       }
       std::cout << "ephoch " << epoch << " done." << std::endl;
       std::cout << "average loss: " << total_loss / N << std::endl;
       std::cout << "average dice score: " << total_dice_score / N << std::endl;
     } // end epoch
 
-    freeLayers();
+    // freeLayers();
   };
 
 private:
@@ -181,31 +198,44 @@ private:
     return layers[final_layer].activations;
   }
 
-  void init_gradient_parameters(int batch_size) {
+  void init_activation_arrays_and_parameters(int batch_size) {
     // Init loss function parameters
     int H = layers[final_layer].output_shape[1];
     int W = layers[final_layer].output_shape[2];
     dLdY = getCudaPointer(batch_size * H * W);
     int count = 0;
-    for(Layer layer : layers) {
+    for(Layer &layer : layers) {
       count++;
 
-      layer.init_gradient_parameters_and_activation_arrays(batch_size);
+      layer.init_activation_arrays_and_parameters(batch_size);
       std::cout << "Allocated layer " << count << std::endl;
     }
   }
   void backward(float *mask, float *y, float *original_inputs, int batch_size) {
+    for(int i = 0; i < layers.size(); i++) {
+      layers[i].done = false;
+      layers[i].children_seen = 0;
+    }
+
     loss_backwards(mask, y, batch_size);
-    layers[final_layer].backward(dLdY, batch_size, original_inputs);
+    int layer_output_size =
+        batch_size * shape_size(layers[final_layer].output_shape);
+    if(has_nans(dLdY, layer_output_size)) {
+      std::cout << "loss has nans" << std::endl;
+    }
+    layers[final_layer].dLdY_copy = getCudaPointer(layer_output_size);
+    cuda_lib_copy_device(
+        dLdY, layer_output_size, layers[final_layer].dLdY_copy);
+    layers[final_layer].backward(batch_size, original_inputs);
   }
   void step(int batch_size, float learning_rate) {
-    for(Layer layer : layers) {
+    for(Layer &layer : layers) {
       layer.step(learning_rate, ++t);
-      layer.zero_grad(batch_size);
+      // layer.zero_grad(batch_size);
     }
   }
   void freeLayers() {
-    for(Layer layer : layers) {
+    for(Layer &layer : layers) {
       layer.free_train_arrs();
     }
   }
