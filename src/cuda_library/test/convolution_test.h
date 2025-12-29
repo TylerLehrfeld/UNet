@@ -1,9 +1,14 @@
 #pragma once
 
-#include "cuda_lib.h"
+#include "../cuda_lib.h"
 #include "test.h"
 #include <cstdlib>
 
+// Do a 2D convolution on the CPU.
+// input: flattened input image: I[batch][channel][H][W]
+// weights: flattened kernels W[in channel][out channel][H][W].
+// Biases are at W[in channels * out channels * K * K + out channel]
+// activations: flattened output image: O[batch][channel][H][W]
 template <typename T>
 inline void cpuConvolve(T *input,
                         T *weights,
@@ -68,7 +73,7 @@ inline void cpuConvolutionBackwardWeightsAndInputs(const T *input,
                                                    const T *weights,
                                                    T *weight_grads,
                                                    T *input_grads,
-                                                   int size,
+                                                   int in_size,
                                                    int in_channels,
                                                    int out_channels,
                                                    int padding,
@@ -76,43 +81,53 @@ inline void cpuConvolutionBackwardWeightsAndInputs(const T *input,
                                                    int kernel_size,
                                                    int batch_size,
                                                    int out_size) {
-  for(int b = 0; b < batch_size; ++b) {
-    for(int c_in = 0; c_in < in_channels; c_in++) {
-      for(int c_out = 0; c_out < out_channels; c_out++) {
-        for(int kh = 0; kh < kernel_size; ++kh) {
-          for(int kw = 0; kw < kernel_size; ++kw) {
-            int start = -padding + kernel_size / 2 + 1;
-            int end = size + padding - kernel_size / 2;
-            int h_out = 0;
-            int w_out = 0;
-            for(int h = start; h < end; h += stride) {
-              for(int w = start; w < end; w += stride) {
+  for(int batch = 0; batch < batch_size; batch++) {
+    for(int c_out = 0; c_out < out_channels; c_out++) {
+      for(int c_in = 0; c_in < in_channels; c_in++) {
+        int start = -padding + kernel_size / 2;
+        int end = in_size + padding - kernel_size / 2;
+        int out_h = 0;
+        for(int h = start; h < end; h += stride) {
+          int out_w = 0;
+          for(int w = start; w < end; w += stride) {
+            for(int kh = 0; kh < kernel_size; kh++) {
+              for(int kw = 0; kw < kernel_size; kw++) {
+                int centered_kh = kh - kernel_size / 2;
+                int centered_kw = kw - kernel_size / 2;
+                if(h + centered_kh >= 0 && h + centered_kh < in_size &&
+                   w + centered_kw < in_size && w + centered_kw >= 0) {
+                  int weights_ind = flattenIndex(c_in,
+                                                 c_out,
+                                                 out_channels,
+                                                 kh,
+                                                 kernel_size,
+                                                 kw,
+                                                 kernel_size);
 
-                if(h >= 0 && w >= 0 && w < size && h < size &&
-                   h_out < out_size && w_out < out_size) {
-                  int weight_ind = flattenIndex(c_in,
+                  int input_ind = flattenIndex(batch,
+                                               c_in,
+                                               in_channels,
+                                               h + centered_kh,
+                                               in_size,
+                                               w + centered_kw,
+                                               in_size);
+                  int output_ind = flattenIndex(batch,
                                                 c_out,
                                                 out_channels,
-                                                kh,
-                                                kernel_size,
-                                                kw,
-                                                kernel_size);
-                  int input_ind =
-                      flattenIndex(b, c_in, in_channels, h, size, w, size);
-                  int output_ind = flattenIndex(
-                      b, c_out, out_channels, h_out, out_size, w_out, out_size);
-                  weight_grads[weight_ind] +=
-                      input[input_ind] * grad_activations[output_ind];
+                                                out_h,
+                                                out_size,
+                                                out_w,
+                                                out_size);
                   input_grads[input_ind] +=
-                      grad_activations[output_ind] * weights[weight_ind];
+                      weights[weights_ind] * grad_activations[output_ind];
+                  weight_grads[weights_ind] +=
+                      grad_activations[output_ind] * input[input_ind];
                 }
-                w_out++;
               }
-              w_out = 0;
-              h_out++;
             }
-            h_out = 0;
+            out_w++;
           }
+          out_h++;
         }
       }
     }
@@ -140,13 +155,13 @@ inline void cpuConvolutionBackwardBiases(const T *weights,
 }
 
 inline void UNetTest::testConvolutionBackward() {
-  int in_size = 8;
+  int in_size = 256;
   int kernel_size = 3;
   int padding = 1;
   int stride = 1;
-  int batch_size = 1;
-  int in_channels = 1;
-  int out_channels = 1;
+  int batch_size = 16;
+  int in_channels = 3;
+  int out_channels = 64;
   int out_size = (in_size + 2 * padding - kernel_size) / stride + 1;
 
   int kernel_size_squared = kernel_size * kernel_size;
@@ -156,21 +171,21 @@ inline void UNetTest::testConvolutionBackward() {
   int weights_offset = in_channels * out_channels * kernel_size_squared;
   int weight_size = weights_offset + out_channels;
   float *cpu_input = new float[input_size];
-  float *cpu_kernels_and_biases = new float[weight_size];
-  float *cpu_grad_kernels_and_biases = new float[weight_size];
+  float *cpu_kernels_and_biases = new float[weight_size]();
+  float *cpu_grad_kernels_and_biases = new float[weight_size]();
   float *cpu_activations = new float[output_size];
-  float *cpu_dLdY = new float[output_size];
-  float *cpu_dYdX = new float[output_size];
+  float *cpu_dLdY = new float[output_size]();
+  float *cpu_dYdX = new float[output_size]();
   initRandomArray(cpu_dLdY, output_size);
   initRandomArray(cpu_input, input_size);
   initRandomArray(cpu_kernels_and_biases, weight_size);
-  printArray(cpu_input, in_size, in_size, "cpu input");
-  printArray(cpu_dLdY, out_size, out_size, "cpu output gradients");
-  float *gpu_input = getCudaPointer(input_size);
-  cuda_lib_copy_to_device(cpu_input, gpu_input, input_size);
-  float *gpu_weights = getCudaPointer(weight_size);
-  cuda_lib_copy_to_device(cpu_kernels_and_biases, gpu_weights, weight_size);
-  float *gpu_activations = getCudaPointer(output_size);
+  // printArray(cpu_input, in_size, in_size, "cpu input");
+  // printArray(cpu_dLdY, out_size, out_size, "cpu output gradients");
+  float *gpu_input = cudaGetPointer<float>(input_size);
+  cudaLibCopyToDevice(cpu_input, gpu_input, input_size);
+  float *gpu_weights = cudaGetPointer<float>(weight_size);
+  cudaLibCopyToDevice(cpu_kernels_and_biases, gpu_weights, weight_size);
+  float *gpu_activations = cudaGetPointer<float>(output_size);
 
   cudaConvolve(gpu_weights,
                gpu_input,
@@ -186,9 +201,9 @@ inline void UNetTest::testConvolutionBackward() {
                in_size,
                padding,
                stride);
-  float *gpu_dLdY;
-  cuda_lib_copy_to_device(cpu_dLdY, gpu_dLdY, output_size);
-  float *gpu_dYdX = getCudaPointer(input_size);
+  float *gpu_dLdY = cudaGetPointer<float>(output_size);
+  cudaLibCopyToDevice(cpu_dLdY, gpu_dLdY, output_size);
+  float *gpu_dYdX = cudaGetPointer<float>(input_size);
 
   cpuConvolutionBackwardBiases(cpu_kernels_and_biases,
                                cpu_dLdY,
@@ -213,12 +228,12 @@ inline void UNetTest::testConvolutionBackward() {
                                          batch_size,
                                          out_size);
 
-  printArray(cpu_dYdX, in_size, in_size, "cpu gradient inputs");
-  printArray(cpu_grad_kernels_and_biases,
-             kernel_size,
-             kernel_size,
-             "kernel gradients");
-  float *gpu_grad_weights = getCudaPointer(weight_size);
+  // printArray(cpu_dYdX, in_size, in_size, "cpu gradient inputs");
+  // printArray(cpu_grad_kernels_and_biases,
+  //        kernel_size,
+  //       kernel_size,
+  //      "kernel gradients");
+  float *gpu_grad_weights = cudaGetPointer<float>(weight_size);
   cudaConvolveBackward(gpu_dLdY,
                        gpu_input,
                        gpu_weights,
@@ -236,9 +251,10 @@ inline void UNetTest::testConvolutionBackward() {
                        stride);
   float *gpu_dYdX_host = cudaToCPU(gpu_dYdX, input_size);
   float *gpu_grad_weights_host = cudaToCPU(gpu_grad_weights, weight_size);
-  printArray(
-      gpu_grad_weights_host, kernel_size, kernel_size, "gpu kernel gradients");
-  printArray(gpu_dYdX_host, in_size, in_size, "gpu dYdX");
+  // printArray(
+  //   gpu_grad_weights_host, kernel_size, kernel_size, "gpu kernel
+  //   gradients");
+  // printArray(gpu_dYdX_host, in_size, in_size, "gpu dYdX");
   assert(checkArrayEquivalence(cpu_dYdX, gpu_dYdX_host, input_size));
   assert(checkArrayEquivalence(
       cpu_grad_kernels_and_biases, gpu_grad_weights_host, weight_size));
@@ -262,11 +278,11 @@ inline void UNetTest::testConvolutionForward() {
   initRandomArray(cpu_input, input_size);
   initRandomArray(cpu_kernels_and_biases, weight_size);
 
-  float *gpu_input = getCudaPointer(input_size);
-  cuda_lib_copy_to_device(cpu_input, gpu_input, input_size);
-  float *gpu_weights = getCudaPointer(weight_size);
-  cuda_lib_copy_to_device(cpu_kernels_and_biases, gpu_weights, weight_size);
-  float *gpu_activations = getCudaPointer(output_size);
+  float *gpu_input = cudaGetPointer<float>(input_size);
+  cudaLibCopyToDevice(cpu_input, gpu_input, input_size);
+  float *gpu_weights = cudaGetPointer<float>(weight_size);
+  cudaLibCopyToDevice(cpu_kernels_and_biases, gpu_weights, weight_size);
+  float *gpu_activations = cudaGetPointer<float>(output_size);
   cpuConvolve<float>(cpu_input,
                      cpu_kernels_and_biases,
                      cpu_activations,

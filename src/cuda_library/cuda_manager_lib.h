@@ -18,3 +18,4 @@ CudaManagerLibReturnValue getDeviceMemInfo(DeviceMemInfo &ret_info);
 CudaManagerLibReturnValue getPointer(void *dPointer, size_t bytes);
 
 CudaManagerLibReturnValue check(cudaError_t err);
+

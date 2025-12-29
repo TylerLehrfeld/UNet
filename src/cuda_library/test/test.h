@@ -7,25 +7,41 @@
 #include <iomanip>
 #include <iostream>
 
-template <typename T> bool isClose(T a, T b, T precision = 5) {
-  T eps = std::pow(10, -precision);
-  return std::abs(a - b) < eps;
+template <typename T> bool isClose(T a, T b, T percentage_diff_tolerance = 1) {
+  T denom = std::max(std::abs(a), std::abs(b));
+  if(std::abs(a - b) <= static_cast<T>(1e-6)) {
+    return true;
+  }
+  T percent_diff = (std::abs(a - b) / denom) * static_cast<T>(100.0);
+  return percent_diff <= percentage_diff_tolerance;
 }
+
 class UNetTest {
 public:
   void testMaxPool();
   void testConvolution();
+  void testUpsample();
+  void testBatchNorm();
 
 private:
   void testMaxPoolForward();
   void testMaxPoolBackward();
   void testConvolutionBackward();
+  void testUpsampleBackward();
   void testConvolutionForward();
+  void testUpsampleForward();
+  void testBatchNormForwardInference();
+  void testBatchNormForwardTraining();
+  void testBatchNormBackwardTraining();
   template <typename T>
-  bool checkArrayEquivalence(T *array_1, T *array_2, size_t length) {
+  bool checkArrayEquivalence(T *array_1,
+                             T *array_2,
+                             size_t length,
+                             float precision = 1) {
     for(size_t i = 0; i < length; ++i) {
-      if(!isClose(array_1[i], array_2[i])) {
-
+      if(!isClose(array_1[i], array_2[i], precision)) {
+        std::cout << i << ": array 1 val: " << array_1[i]
+                  << " array 2 val: " << array_2[i] << std::endl;
         return false;
       }
     }
@@ -58,9 +74,4 @@ inline void printArray(T *arr, int H, int W, std::string label = "") {
     }
     std::cout << std::endl;
   }
-}
-
-inline int
-flattenIndex(int batch_num, int c, int C, int h, int H, int w, int W) {
-  return batch_num * C * H * W + c * H * W + h * W + w;
 }

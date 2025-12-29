@@ -15,6 +15,11 @@
 namespace py = pybind11;
 using std::vector;
 
+enum class LossFunction {
+  kDiceLoss,
+  kDifferenceLoss,
+};
+
 class NN {
 public:
   float test(py::array_t<float> image, py::array_t<uint8_t> mask) {
@@ -62,9 +67,10 @@ public:
   };
   NN() {
     std::cout << "initializing NN" << std::endl << std::flush;
-    cuda_gpu_reset();
+    cudaGPUReset();
   }
-  void create(const vector<LayerDesc> &desc) {
+  void create(const vector<LayerDesc> &desc, LossFunction loss_function) {
+    loss_function_ = loss_function;
     layers.reserve(desc.size());
     int i = 0;
     for(LayerDesc d : desc) {
@@ -150,18 +156,18 @@ public:
           cur_batch_size = N - batch_start_ind;
         }
 
-        loss_values = getCudaPointer(3 * cur_batch_size);
+        loss_values = cudaGetPointer<float>(3 * cur_batch_size);
         float *inputs = img_ptr + batch_start_ind * C * H * W;
-        float *dinputs = getCudaPointer(cur_batch_size * (C * H * W));
-        cuda_lib_copy_to_device(inputs, dinputs, cur_batch_size * C * H * W);
+        float *dinputs = cudaGetPointer<float>(cur_batch_size * (C * H * W));
+        cudaLibCopyToDevice(inputs, dinputs, cur_batch_size * C * H * W);
         float *output_map = forward(dinputs, cur_batch_size, false);
         float *masks = msk_ptr + batch_start_ind * H * W;
-        float *dmask = getCudaPointer(cur_batch_size * H * W);
-        cuda_lib_copy_to_device(masks, dmask, cur_batch_size * H * W);
-        float diceScore = dice_score(output_map, dmask, cur_batch_size, H, W);
-        std::cout << "Batch diceScore: " << diceScore << std::endl;
-        total_dice_score += diceScore;
-        total_loss += 1 - diceScore;
+        float *dmask = cudaGetPointer<float>(cur_batch_size * H * W);
+        cudaLibCopyToDevice(masks, dmask, cur_batch_size * H * W);
+        // float diceScore = dice_score(output_map, dmask, cur_batch_size, H,
+        // W); std::cout << "Batch diceScore: " << diceScore << std::endl;
+        // total_dice_score += diceScore;
+        // total_loss += 1 - diceScore;
         backward(dmask, output_map, dinputs, cur_batch_size);
         step(cur_batch_size, learning_rate);
         cudaLibFree(dinputs);
@@ -190,10 +196,10 @@ private:
     }
     layers[final_layer].forward(input, batch_size, inference);
     if(inference) {
-      cuda_threshold(layers[final_layer].activations,
-                     0.5,
-                     layers[final_layer].output_shape[1] *
-                         layers[final_layer].output_shape[2]);
+      cudaThreshold<float>(layers[final_layer].activations,
+                           0.5,
+                           layers[final_layer].output_shape[1] *
+                               layers[final_layer].output_shape[2]);
     }
     return layers[final_layer].activations;
   }
@@ -202,7 +208,7 @@ private:
     // Init loss function parameters
     int H = layers[final_layer].output_shape[1];
     int W = layers[final_layer].output_shape[2];
-    dLdY = getCudaPointer(batch_size * H * W);
+    dLdY = cudaGetPointer<float>(batch_size * H * W);
     int count = 0;
     for(Layer &layer : layers) {
       count++;
@@ -220,11 +226,11 @@ private:
     loss_backwards(mask, y, batch_size);
     int layer_output_size =
         batch_size * shape_size(layers[final_layer].output_shape);
-    if(has_nans(dLdY, layer_output_size)) {
+    if(cudaHasNans(dLdY, layer_output_size)) {
       std::cout << "loss has nans" << std::endl;
     }
-    layers[final_layer].dLdY_copy = getCudaPointer(layer_output_size);
-    cuda_lib_copy_device(
+    layers[final_layer].dLdY_copy = cudaGetPointer<float>(layer_output_size);
+    cudaLibCopyDeviceToDevice(
         dLdY, layer_output_size, layers[final_layer].dLdY_copy);
     layers[final_layer].backward(batch_size, original_inputs);
   }
@@ -240,16 +246,22 @@ private:
     }
   }
   float dice_score(float *final_map, float *y, int batch_size, int H, int W) {
-    return cuda_dice_score(y, final_map, H, W, batch_size, loss_values);
+    return cudaDiceScore(y, final_map, H, W, batch_size, loss_values);
   }
 
   void loss_backwards(float *mask, float *y, int batch_size) {
     int H = layers[final_layer].output_shape[1];
     int W = layers[final_layer].output_shape[2];
-    cuda_dice_loss_backward(mask, y, loss_values, dLdY, H, W, batch_size);
+    if(loss_function_ == LossFunction::kDiceLoss) {
+      cudaDiceLossBackward(mask, y, loss_values, dLdY, H, W, batch_size);
+    } else if(loss_function_ == LossFunction::kDifferenceLoss) {
+      int total_size = H * W * batch_size;
+      cudaDifferenceLossBackward(mask, y, dLdY, total_size);
+    }
   }
 
   int final_layer;
+  LossFunction loss_function_;
 };
 
 #endif

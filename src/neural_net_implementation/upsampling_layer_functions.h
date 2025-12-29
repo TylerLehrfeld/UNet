@@ -14,17 +14,17 @@ inline void Layer::forward_upsample(float *input,
   const int scale = kernel_size;
   int out_image_size = scale * scale * in_width * in_height;
   int num_activations = batch_size * out_image_size * out_channels;
-  cuda_upsample(input,
-                parameters,
-                activations_int_1,
-                scale,
-                in_channels,
-                out_channels,
-                in_height,
-                in_width,
-                batch_size);
+  cudaUpsample(input,
+               parameters,
+               activations_int_1,
+               scale,
+               in_channels,
+               out_channels,
+               in_height,
+               in_width,
+               batch_size);
 
-  cuda_check_err();
+  cudaCheckErr();
   // float gpu_val = cudaValToCPU(activations, 0);
   // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
   // std::endl;
@@ -38,7 +38,7 @@ inline void Layer::forward_upsample(float *input,
                                  out_height,
                                  out_width);
 
-    cuda_check_err();
+    cudaCheckErr();
 
     // gpu_val = cudaValToCPU(activations, 0);
     // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
@@ -54,7 +54,7 @@ inline void Layer::forward_upsample(float *input,
                                 out_width,
                                 batch_size);
 
-    cuda_check_err();
+    cudaCheckErr();
 
     // gpu_val = cudaValToCPU(activations, 0);
     // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
@@ -62,7 +62,7 @@ inline void Layer::forward_upsample(float *input,
   }
   forward_relu(activations_int_2, activations, num_activations);
 
-  cuda_check_err();
+  cudaCheckErr();
 
   // gpu_val = cudaValToCPU(activations, 0);
   // std::cout << "[DEBUG] upsample check - GPU value: " << gpu_val <<
@@ -77,39 +77,49 @@ inline void Layer::backward_upsample(float *grad_activations,
   int num_activations = batch_size * out_image_size * out_channels;
 
   // Backward through ReLU
-  cuda_relu_backward(grad_activations,
-                     activations_int_2,
-                     grad_activations_int_2,
-                     num_activations);
-
-  cuda_check_err();
+  cudaReluBackward(grad_activations,
+                   activations_int_2,
+                   grad_activations_int_2,
+                   num_activations);
+  if(cudaHasNans(grad_activations_int_2,
+                 batch_size * (shape_size(output_shape)))) {
+    std::cout << "backward upsample relu HAS NANS" << std::endl;
+  };
+  cudaCheckErr();
   // Backward through batch norm
-  cuda_BN_backward(grad_activations_int_2,
-                   activations_int_1,
-                   BN_batch_stats,
-                   BN_parameters,
-                   grad_activations_int_1,
-                   dLdW + num_weights_and_biases,
-                   out_channels,
-                   out_height,
-                   out_width,
-                   batch_size);
+  cudaBatchNormBackward(grad_activations_int_2,
+                        activations_int_1,
+                        BN_batch_stats,
+                        BN_parameters,
+                        grad_activations_int_1,
+                        dLdW + num_weights_and_biases,
+                        out_channels,
+                        out_height,
+                        out_width,
+                        batch_size);
 
-  cuda_check_err();
+  cudaCheckErr();
+  if(cudaHasNans(grad_activations_int_1,
+                 batch_size * (shape_size(output_shape)))) {
+    std::cout << "backward batch norm BN HAS NANS" << std::endl;
+  };
   // Backward through upsample
-  cuda_upsample_backward(grad_activations_int_1,
-                         input,
-                         parameters,
-                         dLdX,
-                         dLdW,
-                         scale,
-                         in_channels,
-                         out_channels,
-                         in_height,
-                         in_width,
-                         batch_size);
+  cudaUpsampleBackward(grad_activations_int_1,
+                       input,
+                       parameters,
+                       dLdX,
+                       dLdW,
+                       scale,
+                       in_channels,
+                       out_channels,
+                       in_height,
+                       in_width,
+                       batch_size);
 
-  cuda_check_err();
+  cudaCheckErr();
+  if(cudaHasNans(dLdX, batch_size * (shape_size(input_shape)))) {
+    std::cout << "backward upsample HAS NANS" << std::endl;
+  };
 }
 
 #endif

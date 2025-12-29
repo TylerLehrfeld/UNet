@@ -27,11 +27,11 @@ inline void Layer::forward_max_pool(float *input, int batch_size) {
               in_height,
               in_width);
 
-  cuda_check_err();
+  cudaCheckErr();
   // gpu_val = cudaValToCPU(activations, 0);
   // std::cout << "[DEBUG] max pool check - GPU value: " << gpu_val <<
   // std::endl;
-  if(has_nans(activations, batch_size * (shape_size(output_shape)))) {
+  if(cudaHasNans(activations, batch_size * (shape_size(output_shape)))) {
     std::cout << "HAS NANS" << std::endl;
   };
 }
@@ -48,8 +48,8 @@ Layer::backward_max_pool(float *dLdY, float *inputs, int batch_size) {
                       in_height,
                       in_width);
 
-  cuda_check_err();
-  if(has_nans(dLdX, batch_size * (shape_size(parents[0]->output_shape)))) {
+  cudaCheckErr();
+  if(cudaHasNans(dLdX, batch_size * (shape_size(parents[0]->output_shape)))) {
     std::cout << "HAS NANS" << std::endl;
   };
 }

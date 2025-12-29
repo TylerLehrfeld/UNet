@@ -5,12 +5,12 @@
 
 inline void
 forward_relu(float *inputs, float *activations, int num_activations) {
-  cuda_relu(inputs, activations, num_activations);
+  cudaRelu(inputs, activations, num_activations);
 }
 
 inline void
 forward_sigmoid(float *inputs, float *activations, int num_activations) {
-  cuda_sigmoid(inputs, activations, num_activations);
+  cudaSigmoid(inputs, activations, num_activations);
 }
 
 #endif // !ACTIVATIONS_UNET_FUNCTIONS

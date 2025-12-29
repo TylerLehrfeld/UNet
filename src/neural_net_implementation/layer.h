@@ -153,12 +153,12 @@ public:
       int size_dLdY = batch_size * shape_size(parents[p]->output_shape);
       if(parents[p]->children_seen == 0) {
 
-        parents[p]->dLdY_copy = getCudaPointer(size_dLdY);
+        parents[p]->dLdY_copy = cudaGetPointer<float>(size_dLdY);
 
-        cuda_lib_copy_device(
+        cudaLibCopyDeviceToDevice(
             dLdX + size_prev, size_dLdY, parents[p]->dLdY_copy);
       } else {
-        cuda_add_nums(dLdX + size_prev, parents[p]->dLdY_copy, size_dLdY);
+        cudaAddBtoA(dLdX + size_prev, parents[p]->dLdY_copy, size_dLdY);
       }
       size_prev += batch_size * shape_size(parents[p]->output_shape);
       parents[p]->children_seen++;
@@ -173,38 +173,38 @@ public:
   }
   void step(float learning_rate, int t) {
     if(layer_type == CONV_LAYER) {
-      cuda_update_weights(parameters,
-                          dLdW,
-                          adam_weights,
-                          learning_rate,
-                          num_weights_and_biases,
-                          t);
-      cuda_update_weights(BN_parameters,
-                          dLdW + num_weights_and_biases,
-                          adam_weights + num_weights_and_biases * 2,
-                          learning_rate,
-                          num_BN_params,
-                          t);
+      cudaUpdateWeights(parameters,
+                        dLdW,
+                        adam_weights,
+                        learning_rate,
+                        num_weights_and_biases,
+                        t);
+      cudaUpdateWeights(BN_parameters,
+                        dLdW + num_weights_and_biases,
+                        adam_weights + num_weights_and_biases * 2,
+                        learning_rate,
+                        num_BN_params,
+                        t);
     } else if(layer_type == UPSAMPLING_LAYER) {
-      cuda_update_weights(parameters,
-                          dLdW,
-                          adam_weights,
-                          learning_rate,
-                          num_weights_and_biases,
-                          t);
-      cuda_update_weights(BN_parameters,
-                          dLdW + num_weights_and_biases,
-                          adam_weights + num_weights_and_biases * 2,
-                          learning_rate,
-                          num_BN_params,
-                          t);
+      cudaUpdateWeights(parameters,
+                        dLdW,
+                        adam_weights,
+                        learning_rate,
+                        num_weights_and_biases,
+                        t);
+      cudaUpdateWeights(BN_parameters,
+                        dLdW + num_weights_and_biases,
+                        adam_weights + num_weights_and_biases * 2,
+                        learning_rate,
+                        num_BN_params,
+                        t);
     } else if(layer_type == ATTENTION_LAYER) {
-      cuda_update_weights(parameters,
-                          dLdW,
-                          adam_weights,
-                          learning_rate,
-                          num_weights_and_biases,
-                          t);
+      cudaUpdateWeights(parameters,
+                        dLdW,
+                        adam_weights,
+                        learning_rate,
+                        num_weights_and_biases,
+                        t);
     }
   }
   void zero_grad(int batch_size) {
@@ -264,39 +264,45 @@ public:
     if(layer_type == CONV_LAYER) {
       int size_out = batch_size * shape_size(output_shape);
       adam_weights =
-          getCudaPointer((num_weights_and_biases + num_BN_params) * 2);
-      activations_int_1 = getCudaPointer(batch_size * shape_size(output_shape));
-      activations_int_2 = getCudaPointer(batch_size * shape_size(output_shape));
-      activations = getCudaPointer(batch_size * shape_size(output_shape));
-      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
+          cudaGetPointer<float>((num_weights_and_biases + num_BN_params) * 2);
+      activations_int_1 =
+          cudaGetPointer<float>(batch_size * shape_size(output_shape));
+      activations_int_2 =
+          cudaGetPointer<float>(batch_size * shape_size(output_shape));
+      activations =
+          cudaGetPointer<float>(batch_size * shape_size(output_shape));
+      dLdW = cudaGetPointer<float>(num_weights_and_biases + num_BN_params);
     } else if(layer_type == CONCAT_LAYER) {
-      activations = getCudaPointer(batch_size * shape_size(output_shape));
+      activations =
+          cudaGetPointer<float>(batch_size * shape_size(output_shape));
     } else if(layer_type == MAX_POOL_LAYER) {
-      activations = getCudaPointer(batch_size * shape_size(output_shape));
+      activations =
+          cudaGetPointer<float>(batch_size * shape_size(output_shape));
     } else if(layer_type == UPSAMPLING_LAYER) {
       int size_out = batch_size * shape_size(output_shape);
       adam_weights =
-          getCudaPointer((num_weights_and_biases + num_BN_params) * 2);
-      activations_int_1 = getCudaPointer(size_out);
-      activations_int_2 = getCudaPointer(size_out);
-      activations = getCudaPointer(size_out);
-      dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
+          cudaGetPointer<float>((num_weights_and_biases + num_BN_params) * 2);
+      activations_int_1 = cudaGetPointer<float>(size_out);
+      activations_int_2 = cudaGetPointer<float>(size_out);
+      activations = cudaGetPointer<float>(size_out);
+      dLdW = cudaGetPointer<float>(num_weights_and_biases + num_BN_params);
     } else if(layer_type == ATTENTION_LAYER) {
       int size_prev =
           batch_size * (input_shape[0] * input_shape[1] * input_shape[2] +
                         input_shape[3] * input_shape[4] * input_shape[5]);
 
-      adam_weights = getCudaPointer(num_weights_and_biases * 2);
+      adam_weights = cudaGetPointer<float>(num_weights_and_biases * 2);
       int intermediate_size =
           input_shape[0] / 2 * input_shape[1] / 2 * input_shape[2] / 2;
 
-      activations_int_1 = getCudaPointer(batch_size * intermediate_size);
+      activations_int_1 = cudaGetPointer<float>(batch_size * intermediate_size);
 
-      activations_int_2 =
-          getCudaPointer(batch_size * input_shape[1] / 2 * input_shape[2] / 2);
+      activations_int_2 = cudaGetPointer<float>(batch_size * input_shape[1] /
+                                                2 * input_shape[2] / 2);
 
-      activations = getCudaPointer(batch_size * shape_size(output_shape));
-      dLdW = getCudaPointer(num_weights_and_biases);
+      activations =
+          cudaGetPointer<float>(batch_size * shape_size(output_shape));
+      dLdW = cudaGetPointer<float>(num_weights_and_biases);
     }
   }
 
@@ -304,34 +310,35 @@ public:
     int size_prev = batch_size * shape_size(input_shape);
     if(layer_type == CONV_LAYER) {
       int size_out = batch_size * shape_size(output_shape);
-      dLdX = getCudaPointer(size_prev);
-      grad_activations_int_1 = getCudaPointer(size_out);
-      grad_activations_int_2 = getCudaPointer(size_out);
-      // dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
+      dLdX = cudaGetPointer<float>(size_prev);
+      grad_activations_int_1 = cudaGetPointer<float>(size_out);
+      grad_activations_int_2 = cudaGetPointer<float>(size_out);
+      // dLdW = cudaGetPointer(num_weights_and_biases + num_BN_params);
     } else if(layer_type == CONCAT_LAYER) {
-      dLdX = getCudaPointer(size_prev);
+      dLdX = cudaGetPointer<float>(size_prev);
     } else if(layer_type == MAX_POOL_LAYER) {
-      dLdX = getCudaPointer(size_prev);
+      dLdX = cudaGetPointer<float>(size_prev);
     } else if(layer_type == UPSAMPLING_LAYER) {
       int size_out = batch_size * shape_size(output_shape);
-      dLdX = getCudaPointer(size_prev);
-      // dLdW = getCudaPointer(num_weights_and_biases + num_BN_params);
-      grad_activations_int_1 = getCudaPointer(size_out);
-      grad_activations_int_2 = getCudaPointer(size_out);
+      dLdX = cudaGetPointer<float>(size_prev);
+      // dLdW = cudaGetPointer(num_weights_and_biases + num_BN_params);
+      grad_activations_int_1 = cudaGetPointer<float>(size_out);
+      grad_activations_int_2 = cudaGetPointer<float>(size_out);
     } else if(layer_type == ATTENTION_LAYER) {
       int size_prev =
           batch_size * (input_shape[0] * input_shape[1] * input_shape[2] +
                         input_shape[3] * input_shape[4] * input_shape[5]);
-      dLdX = getCudaPointer(size_prev);
-      // dLdW = getCudaPointer(num_weights_and_biases);
+      dLdX = cudaGetPointer<float>(size_prev);
+      // dLdW = cudaGetPointer(num_weights_and_biases);
 
       int intermediate_size =
           input_shape[0] / 2 * input_shape[1] / 2 * input_shape[2] / 2;
 
-      grad_activations_int_1 = getCudaPointer(batch_size * intermediate_size);
+      grad_activations_int_1 =
+          cudaGetPointer<float>(batch_size * intermediate_size);
 
-      grad_activations_int_2 =
-          getCudaPointer(batch_size * input_shape[1] / 2 * input_shape[2] / 2);
+      grad_activations_int_2 = cudaGetPointer<float>(
+          batch_size * input_shape[1] / 2 * input_shape[2] / 2);
     }
   }
   float *dLdX;
@@ -433,12 +440,12 @@ private:
     output_size = out_height * out_width * out_channels;
     input_shape = {in_channels, in_height, in_width};
     output_shape = {out_channels, out_height, out_width};
-    parameters =
-        getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
-    BN_parameters = getCudaPointer(out_channels * 2, BN);
+    parameters = cudaGetPointer<float>(
+        num_weights_and_biases, HE, num_weights, num_weights);
+    BN_parameters = cudaGetPointer<float>(out_channels * 2, BN);
     num_BN_params = out_channels * 2;
-    BN_stats = getCudaPointer(out_channels * 2, BN);
-    BN_batch_stats = getCudaPointer(out_channels * 2);
+    BN_stats = cudaGetPointer<float>(out_channels * 2, BN);
+    BN_batch_stats = cudaGetPointer<float>(out_channels * 2);
     std::cout << "add params: " << num_BN_params + num_weights_and_biases
               << std::endl;
   }
@@ -558,8 +565,8 @@ private:
     int num_biases = intermediate_channels + 1;
     num_weights_and_biases = num_biases + num_weights;
     // TODO determine if this is a good enough initialization
-    parameters =
-        getCudaPointer(num_weights_and_biases, HE, num_weights, num_weights);
+    parameters = cudaGetPointer<float>(
+        num_weights_and_biases, HE, num_weights, num_weights);
     std::cout << "add params: " << num_weights_and_biases << std::endl;
   }
 
@@ -598,12 +605,12 @@ private:
     int num_weights = in_channels * out_channels * scale * scale;
     int num_biases = out_channels;
     num_weights_and_biases = num_weights + num_biases;
-    parameters =
-        getCudaPointer(num_biases + num_weights, HE, num_weights, num_weights);
-    BN_parameters = getCudaPointer(out_channels * 2, BN);
+    parameters = cudaGetPointer<float>(
+        num_biases + num_weights, HE, num_weights, num_weights);
+    BN_parameters = cudaGetPointer<float>(out_channels * 2, BN);
     num_BN_params = out_channels * 2;
-    BN_stats = getCudaPointer(out_channels * 2, BN);
-    BN_batch_stats = getCudaPointer(out_channels * 2);
+    BN_stats = cudaGetPointer<float>(out_channels * 2, BN);
+    BN_batch_stats = cudaGetPointer<float>(out_channels * 2);
     std::cout << "add params: " << num_weights_and_biases + num_BN_params
               << std::endl;
   }

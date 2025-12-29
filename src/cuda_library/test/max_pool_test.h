@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cuda_lib.h"
+#include "../cuda_lib.h"
 #include "test.h"
 #include <cmath>
 #include <cstddef>
@@ -38,8 +38,6 @@ inline void cpuForwardMaxPool(float *input_arr,
   }
 }
 
-
-
 inline void UNetTest::testMaxPoolForward() {
   // Define test dimensions
   int in_height = 256;
@@ -55,14 +53,14 @@ inline void UNetTest::testMaxPoolForward() {
   // allocate arrays
   float *cpu_input = new float[total_size];
   float *cpu_output = new float[output_size];
-  float *d_input_array = getCudaPointer(total_size);
-  float *d_output_array = getCudaPointer(output_size);
+  float *d_input_array = cudaGetPointer<float>(total_size);
+  float *d_output_array = cudaGetPointer<float>(output_size);
 
   float *gpu_output;
 
   // init cpu array, copy cpu to gpu input
   initRandomArray(cpu_input, total_size);
-  cuda_lib_copy_to_device(cpu_input, d_input_array, total_size);
+  cudaLibCopyToDevice(cpu_input, d_input_array, total_size);
 
   // verify copy
   float *val = cudaToCPU(d_input_array, 1);
@@ -151,14 +149,14 @@ inline void UNetTest::testMaxPoolBackward() {
   float *cpu_dYdL = new float[output_size];
   float *cpu_dXdY = new float[total_size];
 
-  float *gpu_input = getCudaPointer(total_size);
-  float *gpu_output = getCudaPointer(output_size);
-  float *gpu_dYdL = getCudaPointer(output_size);
-  float *gpu_dXdY = getCudaPointer(total_size);
+  float *gpu_input = cudaGetPointer<float>(total_size);
+  float *gpu_output = cudaGetPointer<float>(output_size);
+  float *gpu_dYdL = cudaGetPointer<float>(output_size);
+  float *gpu_dXdY = cudaGetPointer<float>(total_size);
 
   // init cpu array, copy cpu to gpu input
   initRandomArray(cpu_input, total_size);
-  cuda_lib_copy_to_device(cpu_input, gpu_input, total_size);
+  cudaLibCopyToDevice(cpu_input, gpu_input, total_size);
   cpuForwardMaxPool(cpu_input,
                     cpu_output,
                     batch_size,
@@ -167,11 +165,11 @@ inline void UNetTest::testMaxPoolBackward() {
                     in_width,
                     stride);
 
-  cuda_lib_copy_to_device(cpu_output, gpu_output, output_size);
+  cudaLibCopyToDevice(cpu_output, gpu_output, output_size);
   // init simulated gradients from next layer
   initRandomArray(cpu_dYdL, output_size);
 
-  cuda_lib_copy_to_device(cpu_dYdL, gpu_dYdL, output_size);
+  cudaLibCopyToDevice(cpu_dYdL, gpu_dYdL, output_size);
 
   cpuMaxPoolBackwards(cpu_dYdL,
                       cpu_input,

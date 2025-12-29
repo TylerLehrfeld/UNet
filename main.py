@@ -3,6 +3,12 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+from neural_net import NeuralNet
+from neural_net import LayerType
+from neural_net import LayerDesc
+from neural_net import ActivationType
+from neural_net import LossFunction
+
 
 
 def load_dataset(root_dir):
@@ -135,6 +141,49 @@ F4 = int(2 * F3)
 # keep encoder and decoder even
 upsample_factor = max_pool_stride
 
+#UNET.create(
+#    [
+#        # parameters are in_height, in_width, in_channels, out_channels, kernel size, padding, and stride
+#        LayerDesc(LayerType.CONV_LAYER, [H1, W1, in_channels, F1, 3, 1, 1], []),  # 0
+#        # parameters are in_channels, in_height, in_width, size and stride
+#        LayerDesc(
+#            LayerType.MAX_POOL_LAYER, [F1, H1, W1, max_pool_size, max_pool_stride], [0]
+#        ),  # 1
+#        LayerDesc(LayerType.CONV_LAYER, [H2, W2, F1, F2, 3, 1, 1], [1]),  # 2
+#        LayerDesc(
+#            LayerType.MAX_POOL_LAYER, [F2, H2, W2, max_pool_size, max_pool_stride], [2]
+#        ),  # 3
+#        LayerDesc(LayerType.CONV_LAYER, [H3, W3, F2, F3, 3, 1, 1], [3]),  # 4
+#        LayerDesc(
+#            LayerType.MAX_POOL_LAYER, [F3, H3, W3, max_pool_size, max_pool_stride], [4]
+#        ),  # 5
+#        LayerDesc(LayerType.CONV_LAYER, [H4, W4, F3, F4, 3, 1, 1], [5]),  # 6
+#        # parameters are h_in, w_in, c_in, c_out, stride/upscale
+#        LayerDesc(
+#            LayerType.UPSAMPLING_LAYER, [H4, W4, F4, F3, upsample_factor], [6]
+#        ),  # 7
+#        # parameters are fully determined by parents. First parent is skip connection, second is convolution below
+#        LayerDesc(LayerType.ATTENTION_LAYER, [], [4, 6]),  # 8
+#        # parameters are fully determined by parents. First parent is from skip/attention, second is from convolution below
+#        LayerDesc(LayerType.CONCAT_LAYER, [], [8, 7]),  # 9
+#        LayerDesc(LayerType.CONV_LAYER, [H3, W3, F4, F2, 3, 1, 1], [9]),  # 10
+#        LayerDesc(
+#            LayerType.UPSAMPLING_LAYER, [H3, W3, F2, F2, upsample_factor], [10]
+#        ),  # 11
+#        LayerDesc(LayerType.ATTENTION_LAYER, [], [2, 10]),  # 12
+#        LayerDesc(LayerType.CONCAT_LAYER, [], [12, 11]),  # 13
+#        LayerDesc(LayerType.CONV_LAYER, [H2, W2, F3, F1, 3, 1, 1], [13]),  # 14
+#        LayerDesc(
+#            LayerType.UPSAMPLING_LAYER, [H2, W2, F1, F1, upsample_factor], [14]
+#        ),  # 15
+#        LayerDesc(LayerType.ATTENTION_LAYER, [], [0, 14]),  # 16
+#        LayerDesc(LayerType.CONCAT_LAYER, [], [16, 15]),  # 17
+#        LayerDesc(LayerType.CONV_LAYER, [H1, W1, F2, 1, 3, 1, 1], [17], ActivationType.SIGMOID),  # 18
+#        
+#    ]
+#)
+
+
 UNET.create(
     [
         # parameters are in_height, in_width, in_channels, out_channels, kernel size, padding, and stride
@@ -156,25 +205,22 @@ UNET.create(
         LayerDesc(
             LayerType.UPSAMPLING_LAYER, [H4, W4, F4, F3, upsample_factor], [6]
         ),  # 7
-        # parameters are fully determined by parents. First parent is skip connection, second is convolution below
-        LayerDesc(LayerType.ATTENTION_LAYER, [], [4, 6]),  # 8
         # parameters are fully determined by parents. First parent is from skip/attention, second is from convolution below
-        LayerDesc(LayerType.CONCAT_LAYER, [], [8, 7]),  # 9
-        LayerDesc(LayerType.CONV_LAYER, [H3, W3, F4, F2, 3, 1, 1], [9]),  # 10
+        LayerDesc(LayerType.CONCAT_LAYER, [], [4, 7]),  # 8
+        LayerDesc(LayerType.CONV_LAYER, [H3, W3, F4, F2, 3, 1, 1], [8]),  #9 
         LayerDesc(
-            LayerType.UPSAMPLING_LAYER, [H3, W3, F2, F2, upsample_factor], [10]
-        ),  # 11
-        LayerDesc(LayerType.ATTENTION_LAYER, [], [2, 10]),  # 12
-        LayerDesc(LayerType.CONCAT_LAYER, [], [12, 11]),  # 13
-        LayerDesc(LayerType.CONV_LAYER, [H2, W2, F3, F1, 3, 1, 1], [13]),  # 14
+            LayerType.UPSAMPLING_LAYER, [H3, W3, F2, F2, upsample_factor], [9]
+        ),  # 10
+        LayerDesc(LayerType.CONCAT_LAYER, [], [2, 10]),  # 11
+        LayerDesc(LayerType.CONV_LAYER, [H2, W2, F3, F1, 3, 1, 1], [11]),  # 12
         LayerDesc(
-            LayerType.UPSAMPLING_LAYER, [H2, W2, F1, F1, upsample_factor], [14]
-        ),  # 15
-        LayerDesc(LayerType.ATTENTION_LAYER, [], [0, 14]),  # 16
-        LayerDesc(LayerType.CONCAT_LAYER, [], [16, 15]),  # 17
-        LayerDesc(LayerType.CONV_LAYER, [H1, W1, F2, 1, 3, 1, 1], [17], ActivationType.SIGMOID),  # 18
+            LayerType.UPSAMPLING_LAYER, [H2, W2, F1, F1, upsample_factor], [12]
+        ),  # 13
+        LayerDesc(LayerType.CONCAT_LAYER, [], [0, 13]),  # 14
+        LayerDesc(LayerType.CONV_LAYER, [H1, W1, F2, 1, 3, 1, 1], [14], ActivationType.SIGMOID),  # 15
         
-    ]
+    ],
+    LossFunction.DICE_LOSS   
 )
 
 
